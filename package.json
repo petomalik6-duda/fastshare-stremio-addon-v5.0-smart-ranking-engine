@@ -1,17 +1,13 @@
 {
-  "name": "fastshare-stremio-addon-v5-2",
-  "version": "5.2.0-beta",
-  "description": "FastShare Stremio addon using FastShare Kodi API with v5.2 audio label fix.",
+  "name": "fastshare-stremio-addon-v6-configurator",
+  "version": "6.0.0",
+  "description": "FastShare Stremio addon with configurator using FastShare Kodi API.",
   "main": "server.js",
-  "scripts": {
-    "start": "node server.js"
-  },
+  "scripts": { "start": "node server.js" },
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.18.2",
     "node-fetch": "^2.7.0"
   },
-  "engines": {
-    "node": "20.x"
-  }
+  "engines": { "node": "20.x" }
 }

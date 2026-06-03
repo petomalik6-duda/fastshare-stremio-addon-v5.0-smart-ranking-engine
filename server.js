@@ -1,421 +1,317 @@
 const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch');
+const crypto = require('crypto');
 
 const app = express();
-app.use(cors({ origin: '*' }));
+app.use(cors({ origin: '*', methods: ['GET','POST','OPTIONS'], allowedHeaders: ['*'] }));
+app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
-const VERSION = '5.2.0-beta';
-const BASE_URL = (process.env.BASE_URL || '').replace(/\/$/, '');
-const FASTSHARE_API = process.env.FASTSHARE_API || 'https://fastshare.cz/api/api_kodi.php';
-const USERNAME = process.env.FASTSHARE_USERNAME || '';
-const PASSWORD = process.env.FASTSHARE_PASSWORD || '';
-const PLAYBACK_MODE = process.env.FASTSHARE_PLAYBACK_MODE || 'direct_stream';
-const MAX_RESULTS = parseInt(process.env.FASTSHARE_MAX_RESULTS || '12', 10);
-const ADULT = process.env.FASTSHARE_ADULT || '0';
-let authCache = { hash: process.env.FASTSHARE_HASH || '', ts: process.env.FASTSHARE_HASH ? Date.now() : 0 };
+const PORT = process.env.PORT || 10000;
+const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
+const VERSION = '6.0.0';
+const API = 'https://fastshare.cz/api/api_kodi.php';
+const MAX_STREAMS = Number(process.env.MAX_STREAMS || 60);
 
-const manifest = {
-  id: 'community.fastshare.kodiapi.streams.v52beta',
-  version: VERSION,
-  name: 'FastShare Kodi API',
-  description: 'FastShare stream addon v5.2 Audio Label Fix: CZ/EN labels, probable CZ/SK audio and improved CZ > SK > EN ranking.',
-  logo: 'https://www.stremio.com/website/stremio-logo-small.png',
-  resources: [{ name: 'stream', types: ['movie', 'series'], idPrefixes: ['tt'] }],
-  types: ['movie', 'series'],
-  catalogs: [],
-  idPrefixes: ['tt'],
-  behaviorHints: { configurable: false, configurationRequired: false }
-};
+const authCache = new Map();
 
-function safeJson(res, obj) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Content-Type', 'application/json; charset=utf-8');
-  res.status(200).send(JSON.stringify(obj));
+function b64urlEncode(obj) {
+  return Buffer.from(JSON.stringify(obj), 'utf8').toString('base64url');
 }
-
-async function login(force = false) {
-  if (!force && authCache.hash && Date.now() - authCache.ts < 6 * 60 * 60 * 1000) {
-    return { ok: true, hash: authCache.hash, source: 'cache-or-env' };
-  }
-  if (!USERNAME || !PASSWORD) return { ok: false, error: 'Missing FASTSHARE_USERNAME/FASTSHARE_PASSWORD or FASTSHARE_HASH' };
-  const url = `${FASTSHARE_API}?process=login&login=${encodeURIComponent(USERNAME)}&password=${encodeURIComponent(PASSWORD)}`;
-  const r = await fetch(url, { headers: { 'User-Agent': 'Kodi/21 FastShare Stremio Addon/5.1' } });
-  const text = await r.text();
-  let json;
-  try { json = JSON.parse(text); } catch { return { ok: false, status: r.status, error: 'Invalid JSON', preview: text.slice(0, 400) }; }
-  const hash = json?.user?.hash || json?.hash || json?.data?.hash;
-  if (!hash) return { ok: false, status: r.status, error: 'Hash not found', raw: json };
-  authCache = { hash, ts: Date.now() };
-  return { ok: true, hash, source: 'login', status: r.status };
+function b64urlDecode(str) {
+  try { return JSON.parse(Buffer.from(str, 'base64url').toString('utf8')); } catch { return {}; }
 }
-
-function parseStremioId(type, id) {
-  const raw = String(id || '');
-  const parts = raw.split(':');
-  const baseId = parts[0] || raw;
-  const season = type === 'series' && parts.length >= 3 ? Number(parts[1]) : null;
-  const episode = type === 'series' && parts.length >= 3 ? Number(parts[2]) : null;
-  return { raw, baseId, season, episode, hasEpisode: Number.isFinite(season) && Number.isFinite(episode) };
+function safeText(v) { return String(v || '').replace(/[<>]/g, ''); }
+function normalize(s) {
+  return String(s || '').toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/&amp;/g, '&').replace(/&#39;/g, "'")
+    .replace(/[^a-z0-9]+/g, ' ').trim();
 }
-
-function slugToTitle(slug) {
-  const known = {
-    jackryan: 'Jack Ryan',
-    'jack-ryan': 'Jack Ryan',
-    tomclancysjackryan: "Tom Clancy's Jack Ryan",
-    'tom-clancys-jack-ryan': "Tom Clancy's Jack Ryan"
-  };
-  const key = String(slug || '').toLowerCase();
-  if (known[key]) return known[key];
-  return String(slug || '').replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[-_.]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase()).trim();
+function slug(s) { return normalize(s).replace(/\s+/g, '-'); }
+function esc(s) { return encodeURIComponent(String(s || '')); }
+function bytesToHuman(bytes) {
+  const n = Number(bytes || 0); if (!n) return '';
+  const units = ['B','KB','MB','GB','TB']; let x = n, i = 0;
+  while (x >= 1024 && i < units.length - 1) { x /= 1024; i++; }
+  return i < 2 ? `${Math.round(x)} ${units[i]}` : `${x.toFixed(x >= 10 ? 0 : 1)} ${units[i]}`;
 }
-
-async function getMeta(type, id) {
-  const parsed = parseStremioId(type, id);
-  const lookupId = parsed.baseId || id;
-  try {
-    if (lookupId && lookupId.startsWith('tt')) {
-      const r = await fetch(`https://v3-cinemeta.strem.io/meta/${type}/${lookupId}.json`);
-      const j = await r.json();
-      const m = j.meta || {};
-      return {
-        type, imdbId: lookupId, stremioId: id,
-        title: m.name || m.title || lookupId,
-        year: String(m.year || m.releaseInfo || '').match(/\d{4}/)?.[0] || '',
-        season: parsed.season, episode: parsed.episode, raw: m
-      };
-    }
-  } catch {}
-  return { type, imdbId: lookupId, stremioId: id, title: slugToTitle(lookupId), year: '', season: parsed.season, episode: parsed.episode, raw: {} };
+function parseRuntimeSeconds(meta) {
+  const r = meta && (meta.runtime || meta.raw?.runtime);
+  const m = String(r || '').match(/(\d+)\s*min/i);
+  return m ? Number(m[1]) * 60 : 0;
 }
-
-function normalizeTitle(s) {
-  return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/&amp;/g, '&').replace(/[:._\-]+/g, ' ').replace(/\s+/g, ' ').trim();
+function getExt(name) {
+  const m = String(name || '').match(/\.([a-z0-9]{2,5})(?:$|[\s\]\)])/i);
+  if (!m) return '';
+  const ext = m[1].toUpperCase();
+  return ['MKV','MP4','AVI','MOV','M4V'].includes(ext) ? ext : '';
 }
-
-function getRequestedEpisode(id) {
-  const parts = String(id || '').split(':');
-  if (parts.length >= 3) return { season: Number(parts[1]), episode: Number(parts[2]) };
-  return null;
+function detectQuality(name) {
+  const n = normalize(name);
+  if (/\b(2160p|4k|uhd|uhdr)\b/.test(n)) return '4K';
+  if (/\b(1080p|fullhd|fhd)\b/.test(n)) return '1080p';
+  if (/\b720p\b/.test(n)) return '720p';
+  if (/\b(480p|sd)\b/.test(n)) return '480p';
+  return '';
 }
+function detectAudio(name) {
+  const n = normalize(name);
+  const raw = String(name || '').toLowerCase();
 
-function buildTerms(meta, type = 'movie', id = '') {
-  const title = meta.title || meta.imdbId;
-  const simple = normalizeTitle(title);
-  if (type === 'series') {
-    const ep = getRequestedEpisode(id) || (meta.season && meta.episode ? { season: meta.season, episode: meta.episode } : null);
-    const se = ep ? String(ep.season).padStart(2, '0') : '';
-    const ee = ep ? String(ep.episode).padStart(2, '0') : '';
-    return [...new Set([
-      ep ? `${simple} S${se}E${ee}` : '',
-      ep ? `${simple} ${ep.season}x${ep.episode}` : '',
-      ep ? `${simple} ${se}x${ee}` : '',
-      simple,
-      normalizeTitle(meta.imdbId || '').replace(/\s+/g, '')
-    ].filter(Boolean))].slice(0, 8);
-  }
-  const noSubtitle = simple.split(/\b(the way of water|cesta vody|ohen a popel|fire and ash)\b/i)[0].trim();
-  return [...new Set([title, meta.year ? `${title} ${meta.year}` : '', simple, noSubtitle, simple.split(' ')[0]].filter(Boolean))].slice(0, 6);
+  const czSubs = /\b(cz|cze|cs|ceske|cesky)\s*(tit|titulky|sub|subs|subtitle|forced|title)\b|cztit|czforced/.test(n);
+  const skSubs = /\b(sk|svk|slovak|slovensky)\s*(tit|titulky|sub|subs|subtitle|forced|title)\b|sktit/.test(n);
+
+  const czDubStrong = /czdab|\b(cz|cze|cs|ceske|cesky)\s*(dab|dub|dabing|dubbing|audio)\b|\b(czech)\s*(audio|dub|dubbing)\b/.test(n);
+  const skDubStrong = /skdab|\b(sk|svk|slovak|slovensky)\s*(dab|dub|dabing|dubbing|audio)\b|\b(slovak)\s*(audio|dub|dubbing)\b/.test(n);
+  const enStrong = /\b(en|eng|english)\s*(audio|dab|dub|dabing|dubbing)\b|\b(en|eng)\s*dabing\b/.test(n);
+
+  const hasCZ = /(^|[^a-z])(cz|cze|cs|cesky|czech)([^a-z]|$)/.test(n) || /czhd/i.test(raw);
+  const hasSK = /(^|[^a-z])(sk|svk|slovak|slovensky)([^a-z]|$)/.test(n);
+  const hasEN = /(^|[^a-z])(en|eng|english)([^a-z]|$)/.test(n);
+  const explicitMulti = /multi\s*audio|dual\s*audio|dual/.test(n);
+
+  let label = 'Audio neznáme', key = 'any', score = 0;
+  if (czDubStrong && skDubStrong) { label = 'CZ/SK Dabing'; key = 'CZ-SK'; score = 105; }
+  else if (czDubStrong) { label = 'CZ Dabing'; key = 'CZ'; score = 100; }
+  else if (hasCZ && hasEN) { label = 'CZ/EN Audio'; key = 'CZ-EN'; score = 85; }
+  else if (hasCZ) { label = 'CZ Audio'; key = 'CZ'; score = 65; }
+  else if (skDubStrong) { label = 'SK Dabing'; key = 'SK'; score = 80; }
+  else if (hasSK && hasEN) { label = 'SK/EN Audio'; key = 'SK-EN'; score = 55; }
+  else if (hasSK) { label = 'SK Audio'; key = 'SK'; score = 45; }
+  else if (enStrong || hasEN) { label = 'EN Audio'; key = 'EN'; score = 40; }
+  else if (explicitMulti) { label = 'Multi Audio'; key = 'multi'; score = 30; }
+
+  const subs = [];
+  if (czSubs) subs.push('CZ titulky');
+  if (skSubs) subs.push('SK titulky');
+  const subScore = (czSubs ? 15 : 0) + (skSubs ? 10 : 0);
+  return { label, key, score, subs, subScore };
 }
-
-async function searchFastShare(term) {
-  const auth = await login();
-  if (!auth.ok) return { auth, status: 0, files: [], resultCount: 0 };
-  const attempts = [
-    `${FASTSHARE_API}?process=search&pagination=200&term=${encodeURIComponent(term)}&adult=${ADULT}`,
-    `${FASTSHARE_API}?process=search&kodi=1&pagination=200&term=${encodeURIComponent(term)}&adult=${ADULT}`
-  ];
-  let best = { auth, status: 0, files: [], resultCount: 0, attempts: [] };
-  for (const apiUrl of attempts) {
-    const r = await fetch(apiUrl, { headers: { 'User-Agent': 'Kodi/21 FastShare Stremio Addon/5.1', 'Cookie': `FASTSHARE=${auth.hash}` } });
-    const text = await r.text();
-    let json = null; try { json = JSON.parse(text); } catch {}
-    const filesRaw = json?.search?.file || json?.search?.files || json?.file || json?.files || [];
-    const arr = Array.isArray(filesRaw) ? filesRaw : (filesRaw ? [filesRaw] : []);
-    const files = arr.map(mapFile).filter(f => f && f.url && f.name && isVideo(`${f.name} ${f.url}`));
-    const attempt = { apiUrl, status: r.status, jsonKeys: json ? Object.keys(json) : [], resultCount: files.length, firstFiles: files.slice(0, 3) };
-    best.attempts.push(attempt);
-    if (files.length > best.files.length) best = { ...best, status: r.status, files, resultCount: files.length, apiUrl, rawPreview: text.slice(0, 800), attempts: best.attempts };
-  }
-  return best;
+function hasEpisodePattern(name) {
+  return /\bS\d{1,2}E\d{1,2}\b/i.test(name) || /\b\d{1,2}x\d{1,2}\b/i.test(name);
 }
-
-function mapFile(raw) {
-  const name = raw.filename || raw.name || raw.title || '';
-  const url = raw.download_url || raw.url || raw.download || '';
-  const size = raw?.data?.value || raw.size || raw.filesize || '';
-  return { id: raw.id || extractId(url), name, size, url, image: raw.thumbnail || raw.image || '', duration: raw?.duration?.value || raw.duration || '', durationText: raw.duration_f || '', resolution: raw.resolution || '', raw };
+function getYears(name) {
+  return [...String(name || '').matchAll(/\b(19\d{2}|20\d{2})\b/g)].map(m => m[1]);
 }
-function extractId(url) { return String(url || '').match(/[?&]id=(\d+)/)?.[1] || ''; }
-function isVideo(x) { return /\.(mp4|mkv|avi|mov|m4v|webm|ts)(\?|$|\s)/i.test(x || '') || /download\.php\?id=/i.test(x || ''); }
-function bytesToSize(bytes) { const n = Number(bytes); if (!n || Number.isNaN(n)) return ''; const units = ['B','KB','MB','GB','TB']; let v=n,i=0; while(v>=1024&&i<units.length-1){v/=1024;i++;} return `${v>=10||i<2?v.toFixed(0):v.toFixed(1)} ${units[i]}`; }
-function detectExt(name) { const m = String(name || '').split(/[?#]/)[0].trim().match(/\.([a-z0-9]{2,5})$/i); const ext = m ? m[1].toUpperCase() : ''; return ['MKV','MP4','AVI','MOV','M4V','WEBM','TS'].includes(ext) ? ext : ''; }
-function detectQuality(name) { const s=String(name).toLowerCase(); if(/2160p|4k|uhd|ultrahd/.test(s)) return '4K'; if(/1440p/.test(s)) return '1440p'; if(/1080p|fhd|fullhd/.test(s)) return '1080p'; if(/720p|\bhd\b/.test(s)) return '720p'; if(/480p|\bsd\b/.test(s)) return '480p'; return ''; }
-function detectBad(name) { const s=` ${String(name).toLowerCase()} `; return /\b(cam|camrip|hdcam|ts|telesync|tc|telecine|scr|screener|workprint|wp)\b/.test(s) ? 'CAM/TS' : ''; }
-
-function detectLanguageInfo(name) {
-  const original = String(name || '').replace(/&amp;/g, '&');
-  const raw = original.toLowerCase();
-  const n = ` ${normalizeTitle(original).toLowerCase()} `;
-
-  // Explicit subtitles. These must NOT be treated as dabing/audio.
-  const hasCzSubs = /\b(cz|cs|cze|ces|czech)\s*(tit|title|titles|sub|subs|subtitle|subtitles|forced|titulky)\b|\b(tit|title|titles|sub|subs|subtitle|subtitles|forced|titulky)\s*(cz|cs|cze|ces|czech)\b/i.test(n);
-  const hasSkSubs = /\b(sk|svk|slk|slovak)\s*(tit|title|titles|sub|subs|subtitle|subtitles|forced|titulky)\b|\b(tit|title|titles|sub|subs|subtitle|subtitles|forced|titulky)\s*(sk|svk|slk|slovak)\b/i.test(n);
-  const hasEnSubs = /\b(en|eng|english)\s*(tit|title|titles|sub|subs|subtitle|subtitles)\b|\b(tit|title|titles|sub|subs|subtitle|subtitles)\s*(en|eng|english)\b/i.test(n);
-
-  // Explicit audio/dub markers.
-  const hasCzDub = /\b(czdab|cz\s*dab|cz\s*dabing|cz\s*dub|cz\s*audio|cze\s*audio|czech\s*(audio|dub|dabing)|cesky\s*(dabing|audio))\b|\b(dab|dub|dabing|audio|zvuk)\s*(cz|cze|cs|ces|czech)\b/i.test(n);
-  const hasSkDub = /\b(skdab|sk\s*dab|sk\s*dabing|sk\s*dub|sk\s*audio|svk\s*audio|slovak\s*(audio|dub|dabing)|slovensky\s*(dabing|audio))\b|\b(dab|dub|dabing|audio|zvuk)\s*(sk|svk|slk|slovak)\b/i.test(n);
-  const hasEnAudio = /\b(en\s*(audio|dab|dabing|dub)|eng\s*(audio|dab|dabing|dub)|english\s*(audio|dub|dabing)|audio\s*(en|eng|english)|original\s*(audio|zvuk)?|orig)\b/i.test(n);
-
-  // Language markers. These are weaker than explicit dub/audio.
-  const hasCzMarker = /\b(cz|cs|cze|ces|czech|czhd)\b/i.test(n) || /czhd/i.test(raw);
-  const hasSkMarker = /\b(sk|svk|slk|slovak)\b/i.test(n);
-  const hasEnMarker = /\b(en|eng|english)\b/i.test(n);
-
-  // Explicit combined audio patterns. Do not call them generic Multi Audio.
-  const hasCzEnAudio = /\b(cz|cs|cze|ces|czech)\s*[,;+\-_/ ]\s*(en|eng|english)\b|\b(en|eng|english)\s*[,;+\-_/ ]\s*(cz|cs|cze|ces|czech)\b|eng\+cze|cze\+eng|cs\+en|en\+cs|audio\s*(cze|cz|cs)\s*[-,+_/ ]\s*(eng|en)|audio\s*(eng|en)\s*[-,+_/ ]\s*(cze|cz|cs)/i.test(n);
-  const hasSkEnAudio = /\b(sk|svk|slk|slovak)\s*[,;+\-_/ ]\s*(en|eng|english)\b|\b(en|eng|english)\s*[,;+\-_/ ]\s*(sk|svk|slk|slovak)\b|sk\+en|en\+sk|svk\+eng|eng\+svk/i.test(n);
-  const hasCzSkAudio = /\b(cz|cs|cze|ces|czech)\s*[,;+\-_/ ]\s*(sk|svk|slk|slovak)\b|\b(sk|svk|slk|slovak)\s*[,;+\-_/ ]\s*(cz|cs|cze|ces|czech)\b|cz\+sk|sk\+cz/i.test(n);
-  const hasGenericMulti = /\b(multi\s*audio|multiaudio|dual\s*audio|dualaudio|2audio)\b/i.test(n);
-
-  // Probable audio: plain CZ/SK marker without subtitle-only marker. This is weaker than CZ Dabing.
-  const hasCzProbable = !hasCzDub && !hasCzSubs && hasCzMarker;
-  const hasSkProbable = !hasSkDub && !hasSkSubs && hasSkMarker;
-  const hasEnProbable = !hasEnAudio && !hasEnSubs && hasEnMarker;
-
-  const labels = [];
-  if (hasCzDub) labels.push('CZ Dabing');
-  else if (hasCzSkAudio || (hasCzMarker && hasSkMarker && (hasCzDub || hasSkDub))) labels.push('CZ/SK Audio');
-  else if (hasCzEnAudio) labels.push('CZ/EN Audio');
-  else if (hasCzProbable) labels.push('CZ Audio');
-
-  if (hasSkDub) labels.push('SK Dabing');
-  else if (!labels.length && hasSkEnAudio) labels.push('SK/EN Audio');
-  else if (!labels.length && hasSkProbable) labels.push('SK Audio');
-
-  if (!labels.length && hasEnAudio) labels.push('EN Audio');
-  else if (!labels.length && hasEnProbable) labels.push('EN Audio pravdepodobne');
-
-  if (!labels.length && hasGenericMulti) labels.push('Multi Audio');
-
-  const subLabels = [];
-  if (hasCzSubs) subLabels.push('CZ titulky');
-  if (hasSkSubs) subLabels.push('SK titulky');
-  if (hasEnSubs) subLabels.push('EN titulky');
-
-  let language = '';
-  if (hasCzDub) language = 'CZ';
-  else if (hasCzSkAudio) language = 'CZ/SK';
-  else if (hasCzEnAudio) language = 'CZ/EN';
-  else if (hasCzProbable) language = 'CZ?';
-  else if (hasSkDub) language = 'SK';
-  else if (hasSkEnAudio) language = 'SK/EN';
-  else if (hasSkProbable) language = 'SK?';
-  else if (hasEnAudio) language = 'EN';
-  else if (hasEnProbable) language = 'EN?';
-  else if (hasGenericMulti) language = 'MULTI';
-
-  return {
-    language,
-    label: labels.join(' + '),
-    subtitles: subLabels.join(' + '),
-    hasCzDub, hasSkDub, hasEnAudio,
-    hasCzEnAudio, hasSkEnAudio, hasCzSkAudio, hasGenericMulti,
-    hasMulti: hasGenericMulti || hasCzEnAudio || hasSkEnAudio || hasCzSkAudio,
-    hasCzSubs, hasSkSubs, hasEnSubs,
-    weakCz: hasCzProbable, weakSk: hasSkProbable, weakEn: hasEnProbable,
-    hasCzMarker, hasSkMarker, hasEnMarker
-  };
-}
-
-function isSeriesLikeName(name) { return /\b(s\d{1,2}e\d{1,3}|\d{1,2}x\d{1,3}|season\s*\d+|epizod|episode|diel|serie|seria)\b/i.test(String(name || '')); }
-function containsEpisode(name, ep) { if (!ep) return false; const s=String(name||'').toLowerCase(); const se=String(ep.season).padStart(2,'0'); const ee=String(ep.episode).padStart(2,'0'); return [new RegExp(`s0?${ep.season}e0?${ep.episode}\\b`,'i'), new RegExp(`\\b0?${ep.season}x0?${ep.episode}\\b`,'i'), new RegExp(`s${se}e${ee}`,'i')].some(r=>r.test(s)); }
-function cleanTitleTokens(title) { return normalizeTitle(title).toLowerCase().replace(/\b(the|a|an|and|of|to|in|na|o)\b/g,' ').split(' ').map(x=>x.trim()).filter(x=>x.length>2); }
-function hasDifferentYear(name, wantedYear) { if (!wantedYear) return false; const years=[...String(name).matchAll(/\b(19\d{2}|20\d{2})\b/g)].map(m=>m[1]); return years.length>0 && !years.includes(String(wantedYear)); }
-function hasSequelMismatch(name, meta) {
-  const title = normalizeTitle(meta.title || '').toLowerCase();
-  const s = normalizeTitle(name || '').toLowerCase();
-  if (!title) return false;
-  // Avatar (2009) should not match Avatar 2 / Way of Water / Fire and Ash.
-  // Generic rule: requested title followed by a sequel number or known subtitle is suspicious unless it is explicitly the requested title.
-  const escaped = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  if (new RegExp(`\b${escaped}\s*(?:2|ii|3|iii|4|iv)\b`, 'i').test(s) && !/\bavatar\s*1\b/i.test(s)) return true;
-  if (/\b(the way of water|cesta vody|fire and ash|ohen a popel|oheň a popel|last airbender|legenda o aangovi)\b/i.test(s) && !/way of water|cesta vody|fire and ash|ohen a popel|oheň a popel/i.test(title)) return true;
+function sequelMismatch(name, title, year) {
+  const n = normalize(name), t = normalize(title);
+  if (!t) return false;
+  if (t === 'avatar' && /\bavatar\s*(2|two)\b/.test(n)) return true;
+  if (t === 'dune' && /\bdune\s*(2|part\s*two|cast\s*two)\b/.test(n) && String(year) !== '2024') return true;
   return false;
 }
+function titleMatchScore(fileName, meta, type) {
+  const title = normalize(meta.title || meta.name || '');
+  const file = normalize(fileName);
+  const year = String(meta.year || meta.releaseInfo || '').match(/\d{4}/)?.[0] || '';
+  let score = 0, reasons = [];
 
-
-function parseRuntimeMinutes(raw) {
-  if (!raw) return 0;
-  const m = String(raw).match(/(\d{1,3})\s*min/i);
-  return m ? Number(m[1]) : 0;
-}
-function fileDurationMinutes(file) {
-  const seconds = Number(file.duration || file?.raw?.duration?.value || 0);
-  if (seconds > 0) return Math.round(seconds / 60);
-  const text = String(file.durationText || file?.raw?.duration_f || '');
-  const m = text.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
-  if (!m) return 0;
-  if (m[3]) return Number(m[1]) * 60 + Number(m[2]) + Math.round(Number(m[3]) / 60);
-  return Number(m[1]) * 60 + Math.round(Number(m[2]) / 60);
-}
-function runtimeScore(file, meta, type) {
-  const minutes = fileDurationMinutes(file);
-  if (!minutes) return { score: 0, reason: '' };
-  if (type === 'series') {
-    if (minutes >= 15 && minutes <= 75) return { score: 15, reason: 'series runtime +15' };
-    if (minutes > 100) return { score: -35, reason: 'movie runtime in series -35' };
-    return { score: 0, reason: '' };
+  if (type === 'movie' && hasEpisodePattern(fileName)) {
+    return { reject: true, score: -999, reasons: ['movie-episode-pattern reject'] };
   }
-  const target = parseRuntimeMinutes(meta?.raw?.runtime);
-  if (target) {
-    const diff = Math.abs(minutes - target);
-    if (diff <= 8) return { score: 25, reason: 'runtime exact +25' };
-    if (diff <= 20) return { score: 15, reason: 'runtime close +15' };
-    if (diff >= 60) return { score: -50, reason: 'runtime far -50' };
-    return { score: 0, reason: '' };
+  if (sequelMismatch(fileName, meta.title, year)) {
+    return { reject: true, score: -999, reasons: ['sequel-mismatch reject'] };
   }
-  if (minutes >= 70) return { score: 8, reason: 'movie runtime +8' };
-  if (minutes > 0 && minutes < 20) return { score: -60, reason: 'too short -60' };
-  return { score: 0, reason: '' };
-}
 
+  const tokens = title.split(' ').filter(x => x.length > 1);
+  const hit = tokens.filter(tok => file.includes(tok)).length;
+  if (tokens.length && hit === tokens.length) { score += 100; reasons.push('exact-title +100'); }
+  else if (hit > 0) { const pts = Math.min(40, hit * 12); score += pts; reasons.push(`title-tokens +${pts}`); }
+  else { score -= 80; reasons.push('title-miss -80'); }
+
+  const years = getYears(fileName);
+  if (year) {
+    if (years.includes(year)) { score += 50; reasons.push('year +50'); }
+    else if (years.length) { return { reject: true, score: -999, reasons: ['different-year reject'] }; }
+  }
+  return { reject: false, score, reasons };
+}
+function runtimeScore(file, meta) {
+  const expected = parseRuntimeSeconds(meta);
+  const dur = Number(file.duration || file.raw?.duration?.value || 0);
+  if (!expected || !dur) return { score: 0, reason: null };
+  const diff = Math.abs(dur - expected);
+  if (diff <= 180) return { score: 25, reason: 'runtime exact +25' };
+  if (diff <= 1500) return { score: 15, reason: 'runtime close +15' };
+  if (diff >= 3000) return { score: -50, reason: 'runtime far -50' };
+  return { score: 0, reason: null };
+}
+function qualityScore(q) {
+  if (q === '4K') return [30, '4K +30'];
+  if (q === '1080p') return [20, '1080p +20'];
+  if (q === '720p') return [10, '720p +10'];
+  if (q === '480p') return [-5, '480p -5'];
+  return [0, null];
+}
+function extScore(ext) {
+  if (ext === 'MKV') return [10, 'MKV +10'];
+  if (ext === 'MP4') return [8, 'MP4 +8'];
+  if (ext === 'AVI') return [-3, 'AVI -3'];
+  return [0, null];
+}
 function sizeScore(bytes) {
-  const size = Number(bytes || 0);
-  if (!size) return { score: 0, reason: '' };
-  const gb = size / 1024 / 1024 / 1024;
-  if (gb >= 15) return { score: 25, reason: 'size >15GB +25' };
-  if (gb >= 10) return { score: 20, reason: 'size >10GB +20' };
-  if (gb >= 6) return { score: 15, reason: 'size >6GB +15' };
-  if (gb >= 3) return { score: 10, reason: 'size >3GB +10' };
-  if (gb >= 1) return { score: 5, reason: 'size >1GB +5' };
-  if (gb < 0.3) return { score: -25, reason: 'tiny file -25' };
-  return { score: 0, reason: '' };
+  const gb = Number(bytes || 0) / 1024 / 1024 / 1024;
+  if (gb > 15) return [25, 'size >15GB +25'];
+  if (gb > 10) return [20, 'size >10GB +20'];
+  if (gb > 6) return [15, 'size >6GB +15'];
+  if (gb > 3) return [10, 'size >3GB +10'];
+  if (gb > 1) return [5, 'size >1GB +5'];
+  if (gb && gb < 0.4) return [-40, 'size too small -40'];
+  return [0, null];
 }
-
-function smartScoreFile(file, meta, type, id) {
-  const original=file.name||''; const name=normalizeTitle(original).toLowerCase(); const title=normalizeTitle(meta.title).toLowerCase(); const year=String(meta.year||''); const ep=getRequestedEpisode(id);
-  const lang=detectLanguageInfo(original); const quality=detectQuality(original); const ext=detectExt(original); const bad=detectBad(original);
-  let score=0; const reasons=[];
-
-  // Smart matching: title/year first, but language remains the dominant preference for similarly matched files.
-  if (title && name.includes(title)) { score+=100; reasons.push('exact-title +100'); }
-  else {
-    const tokens=cleanTitleTokens(meta.title); let matched=0;
-    for(const t of tokens) if(name.includes(t)) matched++;
-    if(tokens.length){const pts=Math.round((matched/tokens.length)*60); score+=pts; reasons.push(`title-tokens +${pts}`);}
+function badQualityPenalty(name) {
+  const n = normalize(name);
+  if (/\b(cam|hdcam|ts|telesync|tc|workprint|trailer|sample)\b/.test(n)) return [-120, 'bad-release -120'];
+  return [0, null];
+}
+function scoreFile(file, meta, type) {
+  const name = file.name || file.filename || file.raw?.filename || '';
+  const m = titleMatchScore(name, meta, type);
+  if (m.reject) return null;
+  let score = m.score; const reasons = [...m.reasons];
+  const audio = detectAudio(name); score += audio.score + audio.subScore; reasons.push(`${audio.label} +${audio.score}`); if (audio.subScore) reasons.push(`subtitles +${audio.subScore}`);
+  const q = detectQuality(name); const [qs, qr] = qualityScore(q); score += qs; if (qr) reasons.push(qr);
+  const ext = getExt(name); const [es, er] = extScore(ext); score += es; if (er) reasons.push(er);
+  const [ss, sr] = sizeScore(file.size || file.raw?.data?.value); score += ss; if (sr) reasons.push(sr);
+  const rt = runtimeScore(file, meta); score += rt.score; if (rt.reason) reasons.push(rt.reason);
+  const [bp, br] = badQualityPenalty(name); score += bp; if (br) reasons.push(br);
+  return { ...file, score, scoreReasons: reasons, audio, quality: q, ext };
+}
+function dedupe(files) {
+  const map = new Map();
+  for (const f of files) {
+    const nameKey = normalize(f.name).replace(/\b(2160p|1080p|720p|480p|4k|uhd|fullhd|fhd|mkv|mp4|avi|cz|sk|en|eng|cze|dabing|dab|extended|cut)\b/g, '').replace(/\s+/g, ' ').trim();
+    const key = `${nameKey}|${f.quality}|${f.audio.key}`;
+    if (!map.has(key) || f.score > map.get(key).score) map.set(key, f);
   }
-  if (year && name.includes(year)) { score+=50; reasons.push('year +50'); }
-  if (hasDifferentYear(original,year)) { score-=200; reasons.push('different-year -200'); }
-  if (type==='movie' && hasSequelMismatch(original, meta)) { score-=220; reasons.push('sequel-mismatch -220'); }
-
-  if (type==='movie' && isSeriesLikeName(original)) { score-=120; reasons.push('series-like movie penalty -120'); }
-  if (type==='series') {
-    if(ep && containsEpisode(original,ep)){score+=140; reasons.push('episode match +140');}
-    else if(ep && isSeriesLikeName(original)){score-=80; reasons.push('wrong/unknown episode -80');}
+  return [...map.values()];
+}
+function manifest(configToken = null) {
+  const prefix = configToken ? `/${configToken}` : '';
+  return {
+    id: 'community.fastshare.kodiapi.configurator.v6',
+    version: VERSION,
+    name: 'FastShare Kodi API',
+    description: 'FastShare streams using FastShare Kodi API. Configure with your own lawful account.',
+    logo: 'https://www.stremio.com/website/stremio-logo-small.png',
+    resources: [{ name: 'stream', types: ['movie','series'], idPrefixes: ['tt', ''] }],
+    types: ['movie','series'],
+    catalogs: [],
+    idPrefixes: ['tt'],
+    behaviorHints: { configurable: true, configurationRequired: !configToken },
+    config: [{ key: 'username', type: 'text', title: 'FastShare username' }, { key: 'password', type: 'password', title: 'FastShare password' }]
+  };
+}
+function getCredentials(req) {
+  const token = req.params.config;
+  const cfg = token ? b64urlDecode(token) : {};
+  return {
+    username: cfg.username || process.env.FASTSHARE_USERNAME || '',
+    password: cfg.password || process.env.FASTSHARE_PASSWORD || '',
+    token: token || null
+  };
+}
+async function login(creds) {
+  const username = creds.username, password = creds.password;
+  if (!username || !password) return { ok: false, error: 'missing credentials' };
+  const cacheKey = crypto.createHash('sha1').update(username + ':' + password).digest('hex');
+  const cached = authCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < 1000 * 60 * 55) return { ok: true, hash: cached.hash, source: 'cache' };
+  const url = `${API}?process=login&login=${esc(username)}&password=${esc(password)}`;
+  const res = await fetch(url, { headers: { 'User-Agent': 'Kodi/20 FastShare Stremio' } });
+  const txt = await res.text();
+  let json; try { json = JSON.parse(txt); } catch { json = null; }
+  const hash = json?.user?.hash || json?.hash || json?.data?.hash;
+  if (!hash) return { ok: false, status: res.status, preview: txt.slice(0, 300) };
+  authCache.set(cacheKey, { hash, ts: Date.now() });
+  return { ok: true, hash, source: 'login', status: res.status };
+}
+async function getMeta(type, id) {
+  if (!id.startsWith('tt')) return { type, imdbId: id, stremioId: id, title: id, year: '', season: null, episode: null, raw: {} };
+  const clean = id.split(':')[0];
+  const url = `https://v3-cinemeta.strem.io/meta/${type}/${clean}.json`;
+  const res = await fetch(url); const json = await res.json();
+  const meta = json.meta || {};
+  const parts = id.split(':');
+  return { type, imdbId: clean, stremioId: id, title: meta.name || meta.title || clean, year: String(meta.year || meta.releaseInfo || '').slice(0,4), season: parts[1] ? Number(parts[1]) : null, episode: parts[2] ? Number(parts[2]) : null, raw: meta };
+}
+function termsFor(meta) {
+  const title = meta.title || '';
+  if (meta.type === 'series' && meta.season && meta.episode) {
+    const s = String(meta.season).padStart(2, '0'), e = String(meta.episode).padStart(2, '0');
+    return [`${title} S${s}E${e}`, `${title} ${meta.season}x${e}`, `${title}`];
   }
-
-  // Audio/subtitle engine. CZ > CZ/EN > CZ probable > SK > EN.
-  if (lang.hasCzDub) { score+=100; reasons.push('CZ dabing +100'); }
-  else if (lang.hasCzSkAudio) { score+=90; reasons.push('CZ/SK audio +90'); }
-  else if (lang.hasCzEnAudio) { score+=80; reasons.push('CZ/EN audio +80'); }
-  else if (lang.weakCz) { score+=60; reasons.push('CZ audio probable +60'); }
-
-  if (lang.hasSkDub) { score+=50; reasons.push('SK dabing +50'); }
-  else if (lang.hasSkEnAudio) { score+=40; reasons.push('SK/EN audio +40'); }
-  else if (lang.weakSk) { score+=30; reasons.push('SK audio probable +30'); }
-
-  if (lang.hasEnAudio) { score+=10; reasons.push('EN audio +10'); }
-  else if (lang.weakEn) { score+=5; reasons.push('EN audio probable +5'); }
-
-  if (lang.hasGenericMulti && !lang.hasCzEnAudio && !lang.hasSkEnAudio && !lang.hasCzSkAudio) { score+=25; reasons.push('generic multi audio +25'); }
-  if (lang.hasCzSubs) { score+=15; reasons.push('CZ subtitles +15'); }
-  if (lang.hasSkSubs) { score+=12; reasons.push('SK subtitles +12'); }
-  if (lang.hasEnSubs) { score+=4; reasons.push('EN subtitles +4'); }
-
-  if (quality==='4K') { score+=30; reasons.push('4K +30'); }
-  else if (quality==='1080p') { score+=20; reasons.push('1080p +20'); }
-  else if (quality==='720p') { score+=10; reasons.push('720p +10'); }
-
-  if (ext==='MKV') { score+=10; reasons.push('MKV +10'); }
-  else if (ext==='MP4') { score+=8; reasons.push('MP4 +8'); }
-  else if (ext==='AVI') { score-=3; reasons.push('AVI -3'); }
-
-  const ss = sizeScore(file.size); if (ss.score) { score += ss.score; reasons.push(ss.reason); }
-  const rs = runtimeScore(file, meta, type); if (rs.score) { score += rs.score; reasons.push(rs.reason); }
-  if (bad) { score-=100; reasons.push('bad quality -100'); }
-
-  return { score, reasons };
+  const arr = [title]; if (meta.year) arr.push(`${title} ${meta.year}`);
+  return [...new Set(arr.filter(Boolean))];
 }
-
-function dedupeRankedFiles(files) {
-  const seen=new Map();
-  const containerRank = { MKV: 3, MP4: 2, M4V: 2, AVI: 1 };
-  for(const f of files){
-    const q=detectQuality(f.name)||'auto';
-    const lang=detectLanguageInfo(f.name).language||'any';
-    const ep = String(f.name).match(/\b(s\d{1,2}e\d{1,3}|\d{1,2}x\d{1,3})\b/i)?.[1]?.toLowerCase() || '';
-    let rough=normalizeTitle(f.name).toLowerCase()
-      .replace(/&amp;/g,' ')
-      .replace(/\b(2160p|1080p|720p|480p|4k|uhd|uhdr|fhd|fullhd|bdrip|bluray|webdl|webrip|hdrip|dvdrip)\b/g,' ')
-      .replace(/\b(czdab|skdab|cz|sk|en|eng|czech|slovak|english|dabing|audio|title|tit|subs|subtitles|mkv|mp4|avi|x264|x265|h264|h265|hevc)\b/g,' ')
-      .replace(/\b(19\d{2}|20\d{2})\b/g,' ')
-      .replace(/\s+/g,' ').trim().slice(0,90);
-    const key=`${rough}|${ep}|${q}|${lang}`;
-    const old=seen.get(key);
-    if(!old) { seen.set(key,f); continue; }
-    const oldExt = detectExt(old.name); const newExt = detectExt(f.name);
-    const oldSize = Number(old.size||0); const newSize = Number(f.size||0);
-    const newBetter = (f.score > old.score) || (f.score === old.score && (containerRank[newExt]||0) > (containerRank[oldExt]||0)) || (f.score === old.score && newSize > oldSize);
-    if(newBetter) seen.set(key,f);
+function mapFile(raw) {
+  const name = raw.filename || raw.name || '';
+  return { id: raw.id, name, size: raw.data?.value || raw.size || 0, url: raw.download_url || raw.url, image: raw.thumbnail, duration: raw.duration?.value || raw.duration || '', durationText: raw.duration_f || '', resolution: raw.resolution, raw };
+}
+async function searchFastshare(term, hash) {
+  const url = `${API}?process=search&pagination=200&term=${esc(term)}&adult=0`;
+  const res = await fetch(url, { headers: { 'User-Agent': 'Kodi/20 FastShare Stremio', 'Cookie': `FASTSHARE=${hash}` } });
+  const txt = await res.text();
+  let json; try { json = JSON.parse(txt); } catch { json = null; }
+  const list = json?.search?.file || json?.file || json?.files || [];
+  return { term, status: res.status, resultCount: Array.isArray(list) ? list.length : 0, apiUrl: url, files: Array.isArray(list) ? list.map(mapFile) : [], rawPreview: txt.slice(0, 500) };
+}
+function streamUrl(file, hash) {
+  const base = file.url || file.raw?.download_url;
+  const sep = base.includes('?') ? '&' : '?';
+  return `${base}${sep}stream=1&session=${esc(hash)}&${esc(file.name)}`;
+}
+function streamObj(file, hash, recommended) {
+  const size = bytesToHuman(file.size);
+  const bits = [file.quality, size, file.ext, file.durationText].filter(Boolean).join(' • ');
+  const lang = [file.audio.label, ...(file.audio.subs || [])].filter(Boolean).join(' • ');
+  const title = `${recommended ? '⭐ Odporúčané\n' : ''}${file.name}\n${bits}\n${lang}`;
+  return { name: `FastShare${file.audio.key !== 'any' ? ' ' + file.audio.key.replace('-', '/') : ''}`, title, url: streamUrl(file, hash), behaviorHints: { bingeGroup: `fastshare-${file.quality || 'auto'}-${file.audio.key}` } };
+}
+async function buildStreamResponse(req, debug = false) {
+  const creds = getCredentials(req);
+  const auth = await login(creds);
+  const type = req.params.type, id = req.params.id;
+  const meta = await getMeta(type, id);
+  if (!auth.ok) return debug ? { ok: true, version: VERSION, auth, streams: [] } : { streams: [] };
+  const terms = termsFor(meta);
+  const searches = [];
+  let all = [];
+  for (const term of terms) {
+    const r = await searchFastshare(term, auth.hash);
+    searches.push({ term: r.term, status: r.status, resultCount: r.resultCount, apiUrl: r.apiUrl, firstFiles: r.files.slice(0,3) });
+    all.push(...r.files);
   }
-  return [...seen.values()];
+  const scored = all.map(f => scoreFile(f, meta, type)).filter(Boolean).filter(f => f.score > 50);
+  const sorted = dedupe(scored).sort((a,b) => b.score - a.score).slice(0, MAX_STREAMS);
+  const streams = sorted.map((f, i) => streamObj(f, auth.hash, i === 0));
+  if (!debug) return { streams };
+  return { ok: true, version: VERSION, request: { type, id }, meta, terms, auth: { ok: true, source: auth.source, hasHash: true }, search: searches, streamCount: streams.length, files: sorted, streams };
 }
 
-function makeDirectStreamUrl(file, hash) {
-  const ext=(detectExt(file.name)||'mp4').toLowerCase(); const id=file.id||extractId(file.url); if(!id) return file.url;
-  const base=file.url.replace(/download\.php.*$/i,'download.php'); const filename=encodeURIComponent(file.name||`video.${ext}`);
-  if (PLAYBACK_MODE==='direct_stream') return `${base}?id=${encodeURIComponent(id)}&stream=1&session=${encodeURIComponent(hash)}&${filename}`;
-  return file.url;
-}
+app.get('/', (req, res) => res.redirect('/configure'));
+app.get('/health', (req, res) => res.json({ ok: true, version: VERSION }));
+app.get('/manifest.json', (req, res) => res.json(manifest(null)));
+app.get('/:config/manifest.json', (req, res) => res.json(manifest(req.params.config)));
 
-function makeStream(file, hash) {
-  const ext=detectExt(file.name); const quality=detectQuality(file.name); const langInfo=detectLanguageInfo(file.name); const lang=langInfo.language; const bad=detectBad(file.name); const size=bytesToSize(file.size); const duration=file.durationText || (file.duration ? `${Math.round(Number(file.duration)/60)} min` : '');
-  const parts=[quality,size,ext,duration].filter(Boolean).join(' • ');
-  const langLine=[langInfo.label, langInfo.subtitles, bad].filter(Boolean).join(' • ') || 'Audio neznáme';
-  const rec = file.recommended ? '⭐ Odporúčané' : '';
-  const title=[rec, file.name, parts, langLine].filter(Boolean).join('\n');
-  const cleanLang = lang && !lang.endsWith('?') ? lang : '';
-  return { name: cleanLang ? `FastShare ${cleanLang}` : 'FastShare', title, url: makeDirectStreamUrl(file, hash), behaviorHints: { bingeGroup: `fastshare-${quality||'auto'}-${cleanLang||'any'}` } };
-}
+app.get('/configure', (req, res) => {
+  res.type('html').send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>FastShare Stremio Configurator</title><style>body{font-family:Arial,sans-serif;max-width:720px;margin:40px auto;padding:0 16px;background:#111;color:#eee}input,button{font-size:16px;padding:12px;border-radius:8px;border:1px solid #444;background:#222;color:#fff;width:100%;box-sizing:border-box;margin:8px 0}button{background:#1976d2;cursor:pointer}.box{background:#1b1b1b;padding:18px;border-radius:12px}code{word-break:break-all;color:#9cdcfe}.warn{color:#ffd166}</style></head><body><h1>FastShare Stremio Addon</h1><div class="box"><p>Zadaj FastShare prihlasenie. Údaje sa uložia iba do vygenerovanej URL.</p><input id="u" placeholder="FastShare username"><input id="p" placeholder="FastShare password" type="password"><button onclick="gen()">Vygenerovať install URL</button><p class="warn">URL neposielaj verejne, obsahuje zakódované prihlasovanie.</p><p id="out"></p></div><script>function enc(s){return btoa(unescape(encodeURIComponent(s))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}function gen(){const cfg={username:u.value.trim(),password:p.value};const token=enc(JSON.stringify(cfg));const url='${BASE_URL}/'+token+'/manifest.json';out.innerHTML='<b>Manifest URL:</b><br><code>'+url+'</code><br><br><a style="color:#8ab4ff" href="stremio://'+url.replace(/^https?:\/\//,'')+'">Install do Stremia</a>';}</script></body></html>`);
+});
+app.post('/configure', (req, res) => {
+  const token = b64urlEncode({ username: req.body.username || '', password: req.body.password || '' });
+  res.redirect(`/${token}/manifest.json`);
+});
 
-async function buildStreams(type,id,debug=false){
-  const meta=await getMeta(type,id); const terms=buildTerms(meta,type,id); const auth=await login(); const seen=new Set(); const all=[]; const searchDebug=[];
-  for(const term of terms){
-    const r=await searchFastShare(term); searchDebug.push({term,status:r.status,resultCount:r.resultCount,apiUrl:r.apiUrl,firstFiles:(r.files||[]).slice(0,3),auth:r.auth});
-    for(const f of (r.files||[])){ const key=f.id||f.url||f.name; if(!seen.has(key)){seen.add(key); all.push(f);} }
-    if(all.length>=MAX_RESULTS*3) break;
-  }
-  let rankedAll=all.map(f=>{const ss=smartScoreFile(f,meta,type,id); return {...f,score:ss.score,scoreReasons:ss.reasons};}).sort((a,b)=>b.score-a.score);
-  if(type==='movie') {
-    rankedAll = rankedAll.filter(f => !f.scoreReasons.includes('sequel-mismatch -220') && f.score > 80);
-  }
-  if(type==='series'){ const ep=getRequestedEpisode(id)||(meta.season&&meta.episode?{season:meta.season,episode:meta.episode}:null); if(ep){ const epMatches=rankedAll.filter(f=>containsEpisode(f.name,ep)); rankedAll=epMatches.length?epMatches:[]; } }
-  const ranked=dedupeRankedFiles(rankedAll).slice(0,MAX_RESULTS).map((f,i)=>({...f,recommended:i===0})); const streams=auth.ok?ranked.map(f=>makeStream(f,auth.hash)):[];
-  if(!debug) return { streams };
-  return { ok:true, version:VERSION, request:{type,id}, meta, terms, auth:{ok:auth.ok,source:auth.source,hasHash:!!auth.hash}, search:searchDebug, streamCount:streams.length, files:ranked, streams };
-}
+app.get('/debug/login', async (req, res) => res.json({ ok: true, version: VERSION, login: await login(getCredentials(req)) }));
+app.get('/:config/debug/login', async (req, res) => res.json({ ok: true, version: VERSION, login: await login(getCredentials(req)) }));
+app.get('/debug/search', async (req, res) => { const auth = await login(getCredentials(req)); if (!auth.ok) return res.json({ ok: true, version: VERSION, auth, resultCount: 0, files: [] }); const r = await searchFastshare(req.query.term || 'avatar', auth.hash); res.json({ ok: true, version: VERSION, auth: { ok: true, hasHash: true }, ...r }); });
+app.get('/:config/debug/search', async (req, res) => { const auth = await login(getCredentials(req)); if (!auth.ok) return res.json({ ok: true, version: VERSION, auth, resultCount: 0, files: [] }); const r = await searchFastshare(req.query.term || 'avatar', auth.hash); res.json({ ok: true, version: VERSION, auth: { ok: true, hasHash: true }, ...r }); });
 
-app.get('/', (req,res)=>res.redirect('/manifest.json'));
-app.get('/health', (req,res)=>safeJson(res,{ok:true,version:VERSION}));
-app.get('/manifest.json', (req,res)=>safeJson(res,manifest));
-app.get('/debug/login', async (req,res)=>safeJson(res,{ok:true,version:VERSION,login:await login()}));
-app.get('/debug/search', async (req,res)=>{ const term=req.query.term||'avatar'; const r=await searchFastShare(term); safeJson(res,{ok:true,version:VERSION,term,...r,files:(r.files||[]).slice(0,20)}); });
-app.get('/debug/stream/:type/:id.json', async (req,res)=>{ try{ safeJson(res,await buildStreams(req.params.type,req.params.id,true)); } catch(e){ safeJson(res,{ok:false,version:VERSION,error:String(e.stack||e)}); } });
-app.get('/stream/:type/:id.json', async (req,res)=>{ try{ safeJson(res,await buildStreams(req.params.type,req.params.id,false)); } catch(e){ safeJson(res,{streams:[]}); } });
+app.get('/stream/:type/:id.json', async (req, res) => { try { res.json(await buildStreamResponse(req, false)); } catch (e) { res.json({ streams: [] }); } });
+app.get('/:config/stream/:type/:id.json', async (req, res) => { try { res.json(await buildStreamResponse(req, false)); } catch (e) { res.json({ streams: [] }); } });
+app.get('/debug/stream/:type/:id.json', async (req, res) => { try { res.json(await buildStreamResponse(req, true)); } catch (e) { res.status(500).json({ ok:false, version: VERSION, error: String(e.stack || e) }); } });
+app.get('/:config/debug/stream/:type/:id.json', async (req, res) => { try { res.json(await buildStreamResponse(req, true)); } catch (e) { res.status(500).json({ ok:false, version: VERSION, error: String(e.stack || e) }); } });
 
-const port=process.env.PORT||10000;
-app.listen(port,()=>console.log(`FastShare Stremio addon v${VERSION} listening on ${port}`));
+app.listen(PORT, () => console.log(`FastShare Stremio addon v${VERSION} on ${PORT}`));

@@ -1,34 +1,39 @@
-# FastShare Stremio Addon v5.1 Smart Matching Fix
+# FastShare Stremio Addon v6.0 Configurator
 
-Fixes v5.0 ranking:
-- stronger different-year penalty (`-200`)
-- filters sequel mismatch, e.g. Avatar 2 / Fire and Ash when opening Avatar 2009
-- better CZE/CS/ENG multi-audio detection
-- detects `SK dub`, `ENG+CZE`, `Cs+En-Dab+Tit`, `audio CZE-ENG-SPA-HUN`
-- keeps playback mode from working v5.0/direct stream
+## Render env
 
-## Render
+Required:
 
-Environment:
-
-```text
-NODE_VERSION=20
+```txt
 PORT=10000
-BASE_URL=https://your-app.onrender.com
-FASTSHARE_USERNAME=your_login
-FASTSHARE_PASSWORD=your_password
-FASTSHARE_PLAYBACK_MODE=direct_stream
-FASTSHARE_MAX_RESULTS=12
+BASE_URL=https://your-render-service.onrender.com
 ```
 
-Build command:
+Optional fallback account:
 
-```text
+```txt
+FASTSHARE_USERNAME=your_fastshare_login
+FASTSHARE_PASSWORD=your_fastshare_password
+```
+
+## Build command
+
+```txt
 npm install --omit=dev --no-audit --no-fund
 ```
 
-Start command:
+## Start command
 
-```text
+```txt
 npm start
 ```
+
+## Install
+
+Open:
+
+```txt
+https://your-render-service.onrender.com/configure
+```
+
+Enter FastShare login/password and install generated manifest URL.
