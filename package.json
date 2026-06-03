@@ -1,9 +1,17 @@
 {
-  "name": "fastshare-stremio-addon-v5.0 beta-language-priority",
+  "name": "fastshare-stremio-addon-v5",
   "version": "5.0.0-beta",
-  "description": "FastShare Stremio addon using FastShare Kodi API with CZ > SK > EN Smart Ranking Engine ranking.",
+  "description": "FastShare Stremio addon using FastShare Kodi API with smart ranking.",
   "main": "server.js",
-  "scripts": { "start": "node server.js" },
-  "dependencies": { "cors": "^2.8.5", "express": "^4.18.2", "node-fetch": "^2.7.0" },
-  "engines": { "node": ">=18" }
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "node-fetch": "^2.7.0"
+  },
+  "engines": {
+    "node": "20.x"
+  }
 }
