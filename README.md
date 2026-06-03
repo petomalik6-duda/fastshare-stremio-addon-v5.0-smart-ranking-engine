@@ -37,3 +37,9 @@ https://your-render-service.onrender.com/configure
 ```
 
 Enter FastShare login/password and install generated manifest URL.
+
+
+## v6.2
+- Strict audio detection: CZ/SK dabing only from explicit dab/audio markers.
+- Bare CZ/SK is shown as probable language, not confirmed dabing.
+- CZ/EN and SK/EN detection improved.

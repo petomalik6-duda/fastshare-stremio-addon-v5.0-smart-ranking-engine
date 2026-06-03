@@ -10,7 +10,7 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
 const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
-const VERSION = '6.1.0';
+const VERSION = '6.2.0';
 const API = 'https://fastshare.cz/api/api_kodi.php';
 const MAX_STREAMS = Number(process.env.MAX_STREAMS || 60);
 
@@ -57,30 +57,39 @@ function detectQuality(name) {
   return '';
 }
 function detectAudio(name) {
-  const n = normalize(name);
-  const raw = String(name || '').toLowerCase();
+  const rawName = String(name || '');
+  const n = normalize(rawName);
 
-  const czSubs = /\b(cz|cze|cs|ceske|cesky)\s*(tit|titulky|sub|subs|subtitle|forced|title)\b|cztit|czforced/.test(n);
-  const skSubs = /\b(sk|svk|slovak|slovensky)\s*(tit|titulky|sub|subs|subtitle|forced|title)\b|sktit/.test(n);
+  // Subtitles: "title" on FastShare often means titulky, not audio.
+  const czSubs = /\b(cz|cze|cs|ceske|cesky|czech)\s*(tit|titulky|sub|subs|subtitle|subtitles|forced|title)\b|\b(cztit|czforced|czsubs)\b/.test(n);
+  const skSubs = /\b(sk|svk|slovak|slovensky)\s*(tit|titulky|sub|subs|subtitle|subtitles|forced|title)\b|\b(sktit|skforced|sksubs)\b/.test(n);
 
-  const czDubStrong = /czdab|\b(cz|cze|cs|ceske|cesky)\s*(dab|dub|dabing|dubbing|audio)\b|\b(czech)\s*(audio|dub|dubbing)\b/.test(n);
-  const skDubStrong = /skdab|\b(sk|svk|slovak|slovensky)\s*(dab|dub|dabing|dubbing|audio)\b|\b(slovak)\s*(audio|dub|dubbing)\b/.test(n);
-  const enStrong = /\b(en|eng|english)\s*(audio|dab|dub|dabing|dubbing)\b|\b(en|eng)\s*dabing\b/.test(n);
+  // Strong audio/dubbing signals only. Do NOT treat bare CZ/SK as dabing.
+  const czDubStrong = /\b(czdab|cz\s*dab|cz\s*dabing|cz\s*dub|cz\s*dubbing|cz\s*audio|cze\s*audio|cs\s*audio|cesky\s*dabing|ceske\s*dabing|czech\s*audio|czech\s*dub|czech\s*dubbing)\b/.test(n);
+  const skDubStrong = /\b(skdab|sk\s*dab|sk\s*dabing|sk\s*dub|sk\s*dubbing|sk\s*audio|svk\s*audio|slovak\s*audio|slovak\s*dub|slovak\s*dubbing|slovensky\s*dabing)\b/.test(n);
+  const enStrong = /\b(en\s*audio|eng\s*audio|english\s*audio|en\s*dab|eng\s*dab|en\s*dabing|eng\s*dabing|english\s*dub|english\s*dubbing)\b/.test(n);
 
-  const hasCZ = /(^|[^a-z])(cz|cze|cs|cesky|czech)([^a-z]|$)/.test(n) || /czhd/i.test(raw);
-  const hasSK = /(^|[^a-z])(sk|svk|slovak|slovensky)([^a-z]|$)/.test(n);
-  const hasEN = /(^|[^a-z])(en|eng|english)([^a-z]|$)/.test(n);
-  const explicitMulti = /multi\s*audio|dual\s*audio|dual/.test(n);
+  // Language markers for dual/multi audio. Bare CZ/SK alone is only probable audio, not dabing.
+  const hasCZ = /(^|\b)(cz|cze|cs|cesky|ceske|czech)(\b|$)/.test(n) || /\bczhd\b/.test(n);
+  const hasSK = /(^|\b)(sk|svk|slovak|slovensky)(\b|$)/.test(n);
+  const hasEN = /(^|\b)(en|eng|english)(\b|$)/.test(n);
+
+  const czEnCombo = /(cz|cze|cs|czech)\s*[+,&\-/ ]\s*(en|eng|english)|(en|eng|english)\s*[+,&\-/ ]\s*(cz|cze|cs|czech)/.test(n);
+  const skEnCombo = /(sk|svk|slovak)\s*[+,&\-/ ]\s*(en|eng|english)|(en|eng|english)\s*[+,&\-/ ]\s*(sk|svk|slovak)/.test(n);
+  const explicitMulti = /\b(multi\s*audio|dual\s*audio|dual|multi)\b/.test(n);
 
   let label = 'Audio neznáme', key = 'any', score = 0;
-  if (czDubStrong && skDubStrong) { label = 'CZ/SK Dabing'; key = 'CZ-SK'; score = 105; }
+
+  if (czDubStrong && skDubStrong) { label = 'CZ/SK Dabing'; key = 'CZ-SK'; score = 110; }
+  else if (czDubStrong && (hasEN || enStrong)) { label = 'CZ/EN Audio'; key = 'CZ-EN'; score = 95; }
+  else if (skDubStrong && (hasEN || enStrong)) { label = 'SK/EN Audio'; key = 'SK-EN'; score = 75; }
   else if (czDubStrong) { label = 'CZ Dabing'; key = 'CZ'; score = 100; }
-  else if (hasCZ && hasEN) { label = 'CZ/EN Audio'; key = 'CZ-EN'; score = 85; }
-  else if (hasCZ) { label = 'CZ Audio'; key = 'CZ'; score = 65; }
   else if (skDubStrong) { label = 'SK Dabing'; key = 'SK'; score = 80; }
-  else if (hasSK && hasEN) { label = 'SK/EN Audio'; key = 'SK-EN'; score = 55; }
-  else if (hasSK) { label = 'SK Audio'; key = 'SK'; score = 45; }
+  else if (czEnCombo || (hasCZ && hasEN)) { label = 'CZ/EN Audio'; key = 'CZ-EN'; score = 85; }
+  else if (skEnCombo || (hasSK && hasEN)) { label = 'SK/EN Audio'; key = 'SK-EN'; score = 60; }
   else if (enStrong || hasEN) { label = 'EN Audio'; key = 'EN'; score = 40; }
+  else if (hasCZ) { label = 'CZ pravdepodobne'; key = 'CZ-prob'; score = 35; }
+  else if (hasSK) { label = 'SK pravdepodobne'; key = 'SK-prob'; score = 25; }
   else if (explicitMulti) { label = 'Multi Audio'; key = 'multi'; score = 30; }
 
   const subs = [];
