@@ -10,7 +10,7 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
 const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
-const VERSION = '6.0.0';
+const VERSION = '6.1.0';
 const API = 'https://fastshare.cz/api/api_kodi.php';
 const MAX_STREAMS = Number(process.env.MAX_STREAMS || 60);
 
@@ -297,8 +297,64 @@ app.get('/manifest.json', (req, res) => res.json(manifest(null)));
 app.get('/:config/manifest.json', (req, res) => res.json(manifest(req.params.config)));
 
 app.get('/configure', (req, res) => {
-  res.type('html').send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>FastShare Stremio Configurator</title><style>body{font-family:Arial,sans-serif;max-width:720px;margin:40px auto;padding:0 16px;background:#111;color:#eee}input,button{font-size:16px;padding:12px;border-radius:8px;border:1px solid #444;background:#222;color:#fff;width:100%;box-sizing:border-box;margin:8px 0}button{background:#1976d2;cursor:pointer}.box{background:#1b1b1b;padding:18px;border-radius:12px}code{word-break:break-all;color:#9cdcfe}.warn{color:#ffd166}</style></head><body><h1>FastShare Stremio Addon</h1><div class="box"><p>Zadaj FastShare prihlasenie. Údaje sa uložia iba do vygenerovanej URL.</p><input id="u" placeholder="FastShare username"><input id="p" placeholder="FastShare password" type="password"><button onclick="gen()">Vygenerovať install URL</button><p class="warn">URL neposielaj verejne, obsahuje zakódované prihlasovanie.</p><p id="out"></p></div><script>function enc(s){return btoa(unescape(encodeURIComponent(s))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}function gen(){const cfg={username:u.value.trim(),password:p.value};const token=enc(JSON.stringify(cfg));const url='${BASE_URL}/'+token+'/manifest.json';out.innerHTML='<b>Manifest URL:</b><br><code>'+url+'</code><br><br><a style="color:#8ab4ff" href="stremio://'+url.replace(/^https?:\/\//,'')+'">Install do Stremia</a>';}</script></body></html>`);
+  const origin = BASE_URL || `${req.protocol}://${req.get('host')}`;
+  res.type('html').send(`<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FastShare Stremio Configurator</title>
+<style>
+body{font-family:Arial,sans-serif;max-width:760px;margin:40px auto;padding:0 16px;background:#111;color:#eee}
+input,button{font-size:16px;padding:12px;border-radius:8px;border:1px solid #444;background:#222;color:#fff;width:100%;box-sizing:border-box;margin:8px 0}
+button{background:#1976d2;cursor:pointer}.box{background:#1b1b1b;padding:18px;border-radius:12px;margin:12px 0}
+code,textarea{word-break:break-all;color:#9cdcfe;background:#0b0b0b}.warn{color:#ffd166}.ok{color:#8ee59b}
+a{color:#8ab4ff} textarea{width:100%;min-height:92px;border:1px solid #444;border-radius:8px;padding:10px;box-sizing:border-box}
+</style></head>
+<body>
+<h1>FastShare Stremio Addon</h1>
+<div class="box">
+<p>Zadaj FastShare prihlasenie. Údaje sa uložia iba do vygenerovanej manifest URL.</p>
+<input id="fsUser" name="username" placeholder="FastShare username" autocomplete="username">
+<input id="fsPass" name="password" placeholder="FastShare password" type="password" autocomplete="current-password">
+<button type="button" id="genBtn">Vygenerovať URL</button>
+<p class="warn">URL neposielaj verejne, obsahuje zakódované prihlasovanie.</p>
+<div id="out"><p>Zatiaľ nie je vygenerovaná žiadna URL.</p></div>
+</div>
+<div class="box">
+<p><b>Fallback bez JavaScriptu:</b> keď tlačidlo nefunguje, použi toto tlačidlo. Presmeruje ťa priamo na konfigurovaný manifest.</p>
+<form method="post" action="/configure">
+<input name="username" placeholder="FastShare username">
+<input name="password" placeholder="FastShare password" type="password">
+<button type="submit">Otvoriť manifest bez JS</button>
+</form>
+</div>
+<script>
+(function(){
+  var BASE = ${JSON.stringify(origin)};
+  function encUtf8ToB64Url(str){
+    var bytes = new TextEncoder().encode(str);
+    var bin = '';
+    for (var i=0;i<bytes.length;i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+  }
+  function html(s){return String(s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+  function generate(){
+    var u = document.getElementById('fsUser').value.trim();
+    var p = document.getElementById('fsPass').value;
+    var out = document.getElementById('out');
+    if(!u || !p){ out.innerHTML = '<p class="warn">Vyplň username aj password.</p>'; return; }
+    var token = encUtf8ToB64Url(JSON.stringify({username:u,password:p}));
+    var manifestUrl = BASE + '/' + token + '/manifest.json';
+    var stremioUrl = 'stremio://' + manifestUrl.replace(/^https?:\/\//,'');
+    out.innerHTML = '<p class="ok"><b>URL vygenerovaná.</b></p>'+
+      '<p><b>Manifest URL:</b></p><textarea readonly onclick="this.select()">'+html(manifestUrl)+'</textarea>'+
+      '<p><a href="'+html(stremioUrl)+'">Install do Stremia</a></p>'+
+      '<p><a href="'+html(manifestUrl)+'" target="_blank">Otvoriť manifest v prehliadači</a></p>';
+  }
+  document.getElementById('genBtn').addEventListener('click', generate);
+})();
+</script>
+</body></html>`);
 });
+
 app.post('/configure', (req, res) => {
   const token = b64urlEncode({ username: req.body.username || '', password: req.body.password || '' });
   res.redirect(`/${token}/manifest.json`);
