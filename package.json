@@ -1,7 +1,7 @@
 {
-  "name": "fastshare-stremio-addon-v5-1",
-  "version": "5.1.0-beta",
-  "description": "FastShare Stremio addon using FastShare Kodi API with smart ranking v5.1.",
+  "name": "fastshare-stremio-addon-v5-2",
+  "version": "5.2.0-beta",
+  "description": "FastShare Stremio addon using FastShare Kodi API with v5.2 audio label fix.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"

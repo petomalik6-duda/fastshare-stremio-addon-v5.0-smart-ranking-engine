@@ -2,10 +2,12 @@ services:
   - type: web
     name: fastshare-stremio-addon
     env: node
-    buildCommand: npm install
+    buildCommand: npm install --omit=dev --no-audit --no-fund
     startCommand: npm start
     envVars:
       - key: PORT
         value: 10000
+      - key: NODE_VERSION
+        value: 20
       - key: FASTSHARE_PLAYBACK_MODE
         value: direct_stream

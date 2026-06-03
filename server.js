@@ -6,7 +6,7 @@ const app = express();
 app.use(cors({ origin: '*' }));
 app.use(express.json());
 
-const VERSION = '5.1.0-beta';
+const VERSION = '5.2.0-beta';
 const BASE_URL = (process.env.BASE_URL || '').replace(/\/$/, '');
 const FASTSHARE_API = process.env.FASTSHARE_API || 'https://fastshare.cz/api/api_kodi.php';
 const USERNAME = process.env.FASTSHARE_USERNAME || '';
@@ -17,10 +17,10 @@ const ADULT = process.env.FASTSHARE_ADULT || '0';
 let authCache = { hash: process.env.FASTSHARE_HASH || '', ts: process.env.FASTSHARE_HASH ? Date.now() : 0 };
 
 const manifest = {
-  id: 'community.fastshare.kodiapi.streams.v51beta',
+  id: 'community.fastshare.kodiapi.streams.v52beta',
   version: VERSION,
   name: 'FastShare Kodi API',
-  description: 'FastShare stream addon v5.1 Smart Matching Fix: stronger year/sequel filtering, multi-audio detection, CZ > SK > EN ranking.',
+  description: 'FastShare stream addon v5.2 Audio Label Fix: CZ/EN labels, probable CZ/SK audio and improved CZ > SK > EN ranking.',
   logo: 'https://www.stremio.com/website/stremio-logo-small.png',
   resources: [{ name: 'stream', types: ['movie', 'series'], idPrefixes: ['tt'] }],
   types: ['movie', 'series'],
@@ -157,44 +157,49 @@ function detectBad(name) { const s=` ${String(name).toLowerCase()} `; return /\b
 
 function detectLanguageInfo(name) {
   const original = String(name || '').replace(/&amp;/g, '&');
-  const s = ` ${normalizeTitle(original).toLowerCase()} `;
+  const raw = original.toLowerCase();
+  const n = ` ${normalizeTitle(original).toLowerCase()} `;
 
-  // Normalize common language aliases used in FastShare filenames.
-  // Important: plain "cz" is NOT enough for CZ dabing. It may mean subtitles or just uploader tag.
-  const czToken = String.raw`(?:cz|cs|cze|ces|czech|cesky|ceske|cesky)`;
-  const skToken = String.raw`(?:sk|svk|slk|slovak|slovensky|slovenske)`;
-  const enToken = String.raw`(?:en|eng|english|anglicky|anglicke)`;
+  // Explicit subtitles. These must NOT be treated as dabing/audio.
+  const hasCzSubs = /\b(cz|cs|cze|ces|czech)\s*(tit|title|titles|sub|subs|subtitle|subtitles|forced|titulky)\b|\b(tit|title|titles|sub|subs|subtitle|subtitles|forced|titulky)\s*(cz|cs|cze|ces|czech)\b/i.test(n);
+  const hasSkSubs = /\b(sk|svk|slk|slovak)\s*(tit|title|titles|sub|subs|subtitle|subtitles|forced|titulky)\b|\b(tit|title|titles|sub|subs|subtitle|subtitles|forced|titulky)\s*(sk|svk|slk|slovak)\b/i.test(n);
+  const hasEnSubs = /\b(en|eng|english)\s*(tit|title|titles|sub|subs|subtitle|subtitles)\b|\b(tit|title|titles|sub|subs|subtitle|subtitles)\s*(en|eng|english)\b/i.test(n);
 
-  const hasCzSubs = new RegExp(`\b${czToken}\s*(?:tit|title|titles|sub|subs|subtitle|subtitles|forced|titulky)\b|\b(?:tit|title|subs|subtitles|titulky)\s*${czToken}\b`, 'i').test(s);
-  const hasSkSubs = new RegExp(`\b${skToken}\s*(?:tit|title|titles|sub|subs|subtitle|subtitles|forced|titulky)\b|\b(?:tit|title|subs|subtitles|titulky)\s*${skToken}\b`, 'i').test(s);
-  const hasEnSubs = new RegExp(`\b${enToken}\s*(?:tit|title|titles|sub|subs|subtitle|subtitles)\b|\b(?:tit|title|subs|subtitles)\s*${enToken}\b`, 'i').test(s);
+  // Explicit audio/dub markers.
+  const hasCzDub = /\b(czdab|cz\s*dab|cz\s*dabing|cz\s*dub|cz\s*audio|cze\s*audio|czech\s*(audio|dub|dabing)|cesky\s*(dabing|audio))\b|\b(dab|dub|dabing|audio|zvuk)\s*(cz|cze|cs|ces|czech)\b/i.test(n);
+  const hasSkDub = /\b(skdab|sk\s*dab|sk\s*dabing|sk\s*dub|sk\s*audio|svk\s*audio|slovak\s*(audio|dub|dabing)|slovensky\s*(dabing|audio))\b|\b(dab|dub|dabing|audio|zvuk)\s*(sk|svk|slk|slovak)\b/i.test(n);
+  const hasEnAudio = /\b(en\s*(audio|dab|dabing|dub)|eng\s*(audio|dab|dabing|dub)|english\s*(audio|dub|dabing)|audio\s*(en|eng|english)|original\s*(audio|zvuk)?|orig)\b/i.test(n);
 
-  const hasCzDub = new RegExp(`\b${czToken}\s*(?:dab|dub|dabing|audio|zvuk)\b|\b(?:dab|dub|dabing|audio|zvuk)\s*${czToken}\b`, 'i').test(s);
-  const hasSkDub = new RegExp(`\b${skToken}\s*(?:dab|dub|dabing|audio|zvuk)\b|\b(?:dab|dub|dabing|audio|zvuk)\s*${skToken}\b`, 'i').test(s);
-  const hasEnAudio = new RegExp(`\b${enToken}\s*(?:dab|dub|dabing|audio|zvuk)\b|\b(?:dab|dub|dabing|audio|zvuk)\s*${enToken}\b|\boriginal\s*(?:audio|zvuk)?\b|\borig\b`, 'i').test(s);
+  // Language markers. These are weaker than explicit dub/audio.
+  const hasCzMarker = /\b(cz|cs|cze|ces|czech|czhd)\b/i.test(n) || /czhd/i.test(raw);
+  const hasSkMarker = /\b(sk|svk|slk|slovak)\b/i.test(n);
+  const hasEnMarker = /\b(en|eng|english)\b/i.test(n);
 
-  // Multi / dual audio patterns: CZ EN, ENG+CZE, Cs+En-Dab+Tit, audio CZE-ENG-SPA-HUN, etc.
-  const hasCzMarker = new RegExp(`\b${czToken}\b`, 'i').test(s);
-  const hasSkMarker = new RegExp(`\b${skToken}\b`, 'i').test(s);
-  const hasEnMarker = new RegExp(`\b${enToken}\b`, 'i').test(s);
-  const hasAudioContext = /\b(audio|dab|dub|dabing|zvuk|5\.1|6ch|ac3|dts|remux|dual|multi)\b/i.test(s);
-  const hasMulti = /(multi|dual|dual\s*audio|dualaudio|2audio|multi\s*audio|cz\+sk|sk\+cz|cz\s*[,;+\-]\s*en|en\s*[,;+\-]\s*cz|cze\s*[,;+\-]\s*eng|eng\s*[,;+\-]\s*cze|cs\s*[,;+\-]\s*en|en\s*[,;+\-]\s*cs)/i.test(s) || (hasAudioContext && ((hasCzMarker && hasEnMarker) || (hasSkMarker && hasEnMarker) || (hasCzMarker && hasSkMarker)));
+  // Explicit combined audio patterns. Do not call them generic Multi Audio.
+  const hasCzEnAudio = /\b(cz|cs|cze|ces|czech)\s*[,;+\-_/ ]\s*(en|eng|english)\b|\b(en|eng|english)\s*[,;+\-_/ ]\s*(cz|cs|cze|ces|czech)\b|eng\+cze|cze\+eng|cs\+en|en\+cs|audio\s*(cze|cz|cs)\s*[-,+_/ ]\s*(eng|en)|audio\s*(eng|en)\s*[-,+_/ ]\s*(cze|cz|cs)/i.test(n);
+  const hasSkEnAudio = /\b(sk|svk|slk|slovak)\s*[,;+\-_/ ]\s*(en|eng|english)\b|\b(en|eng|english)\s*[,;+\-_/ ]\s*(sk|svk|slk|slovak)\b|sk\+en|en\+sk|svk\+eng|eng\+svk/i.test(n);
+  const hasCzSkAudio = /\b(cz|cs|cze|ces|czech)\s*[,;+\-_/ ]\s*(sk|svk|slk|slovak)\b|\b(sk|svk|slk|slovak)\s*[,;+\-_/ ]\s*(cz|cs|cze|ces|czech)\b|cz\+sk|sk\+cz/i.test(n);
+  const hasGenericMulti = /\b(multi\s*audio|multiaudio|dual\s*audio|dualaudio|2audio)\b/i.test(n);
 
-  const weakCz = !hasCzSubs && !hasCzDub && hasCzMarker;
-  const weakSk = !hasSkSubs && !hasSkDub && hasSkMarker;
-  const weakEn = !hasEnSubs && !hasEnAudio && hasEnMarker;
+  // Probable audio: plain CZ/SK marker without subtitle-only marker. This is weaker than CZ Dabing.
+  const hasCzProbable = !hasCzDub && !hasCzSubs && hasCzMarker;
+  const hasSkProbable = !hasSkDub && !hasSkSubs && hasSkMarker;
+  const hasEnProbable = !hasEnAudio && !hasEnSubs && hasEnMarker;
 
   const labels = [];
-  if (hasMulti) {
-    if (hasCzMarker && hasSkMarker && !hasEnMarker) labels.push('CZ/SK Dabing');
-    else if (hasCzMarker && hasEnMarker) labels.push('CZ/EN Audio');
-    else if (hasSkMarker && hasEnMarker) labels.push('SK/EN Audio');
-    else labels.push('Multi Audio');
-  } else {
-    if (hasCzDub) labels.push('CZ Dabing');
-    if (hasSkDub) labels.push('SK Dabing');
-    if (hasEnAudio) labels.push('EN Audio');
-  }
+  if (hasCzDub) labels.push('CZ Dabing');
+  else if (hasCzSkAudio || (hasCzMarker && hasSkMarker && (hasCzDub || hasSkDub))) labels.push('CZ/SK Audio');
+  else if (hasCzEnAudio) labels.push('CZ/EN Audio');
+  else if (hasCzProbable) labels.push('CZ Audio');
+
+  if (hasSkDub) labels.push('SK Dabing');
+  else if (!labels.length && hasSkEnAudio) labels.push('SK/EN Audio');
+  else if (!labels.length && hasSkProbable) labels.push('SK Audio');
+
+  if (!labels.length && hasEnAudio) labels.push('EN Audio');
+  else if (!labels.length && hasEnProbable) labels.push('EN Audio pravdepodobne');
+
+  if (!labels.length && hasGenericMulti) labels.push('Multi Audio');
 
   const subLabels = [];
   if (hasCzSubs) subLabels.push('CZ titulky');
@@ -202,19 +207,28 @@ function detectLanguageInfo(name) {
   if (hasEnSubs) subLabels.push('EN titulky');
 
   let language = '';
-  if (hasMulti) {
-    if (hasCzMarker && hasSkMarker && !hasEnMarker) language = 'CZ/SK';
-    else if (hasCzMarker && hasEnMarker) language = 'CZ/EN';
-    else if (hasSkMarker && hasEnMarker) language = 'SK/EN';
-    else language = 'MULTI';
-  } else if (hasCzDub) language = 'CZ';
+  if (hasCzDub) language = 'CZ';
+  else if (hasCzSkAudio) language = 'CZ/SK';
+  else if (hasCzEnAudio) language = 'CZ/EN';
+  else if (hasCzProbable) language = 'CZ?';
   else if (hasSkDub) language = 'SK';
+  else if (hasSkEnAudio) language = 'SK/EN';
+  else if (hasSkProbable) language = 'SK?';
   else if (hasEnAudio) language = 'EN';
-  else if (weakCz) language = 'CZ?';
-  else if (weakSk) language = 'SK?';
-  else if (weakEn) language = 'EN?';
+  else if (hasEnProbable) language = 'EN?';
+  else if (hasGenericMulti) language = 'MULTI';
 
-  return { language, label: labels.join(' + '), subtitles: subLabels.join(' + '), hasCzDub, hasSkDub, hasEnAudio, hasMulti, hasCzSubs, hasSkSubs, hasEnSubs, weakCz, weakSk, weakEn, hasCzMarker, hasSkMarker, hasEnMarker };
+  return {
+    language,
+    label: labels.join(' + '),
+    subtitles: subLabels.join(' + '),
+    hasCzDub, hasSkDub, hasEnAudio,
+    hasCzEnAudio, hasSkEnAudio, hasCzSkAudio, hasGenericMulti,
+    hasMulti: hasGenericMulti || hasCzEnAudio || hasSkEnAudio || hasCzSkAudio,
+    hasCzSubs, hasSkSubs, hasEnSubs,
+    weakCz: hasCzProbable, weakSk: hasSkProbable, weakEn: hasEnProbable,
+    hasCzMarker, hasSkMarker, hasEnMarker
+  };
 }
 
 function isSeriesLikeName(name) { return /\b(s\d{1,2}e\d{1,3}|\d{1,2}x\d{1,3}|season\s*\d+|epizod|episode|diel|serie|seria)\b/i.test(String(name || '')); }
@@ -304,19 +318,23 @@ function smartScoreFile(file, meta, type, id) {
     else if(ep && isSeriesLikeName(original)){score-=80; reasons.push('wrong/unknown episode -80');}
   }
 
-  // Audio/subtitle engine. CZ > SK > EN. Subtitles are extra, not audio.
+  // Audio/subtitle engine. CZ > CZ/EN > CZ probable > SK > EN.
   if (lang.hasCzDub) { score+=100; reasons.push('CZ dabing +100'); }
-  if (lang.hasSkDub) { score+=80; reasons.push('SK dabing +80'); }
-  if (lang.hasEnAudio) { score+=40; reasons.push('EN audio +40'); }
-  if (lang.hasMulti) {
-    if (lang.hasCzMarker) { score+=90; reasons.push('multi with CZ +90'); }
-    else if (lang.hasSkMarker) { score+=70; reasons.push('multi with SK +70'); }
-    else { score+=30; reasons.push('multi audio +30'); }
-  }
+  else if (lang.hasCzSkAudio) { score+=90; reasons.push('CZ/SK audio +90'); }
+  else if (lang.hasCzEnAudio) { score+=80; reasons.push('CZ/EN audio +80'); }
+  else if (lang.weakCz) { score+=60; reasons.push('CZ audio probable +60'); }
+
+  if (lang.hasSkDub) { score+=50; reasons.push('SK dabing +50'); }
+  else if (lang.hasSkEnAudio) { score+=40; reasons.push('SK/EN audio +40'); }
+  else if (lang.weakSk) { score+=30; reasons.push('SK audio probable +30'); }
+
+  if (lang.hasEnAudio) { score+=10; reasons.push('EN audio +10'); }
+  else if (lang.weakEn) { score+=5; reasons.push('EN audio probable +5'); }
+
+  if (lang.hasGenericMulti && !lang.hasCzEnAudio && !lang.hasSkEnAudio && !lang.hasCzSkAudio) { score+=25; reasons.push('generic multi audio +25'); }
   if (lang.hasCzSubs) { score+=15; reasons.push('CZ subtitles +15'); }
   if (lang.hasSkSubs) { score+=12; reasons.push('SK subtitles +12'); }
   if (lang.hasEnSubs) { score+=4; reasons.push('EN subtitles +4'); }
-  if (!lang.hasCzDub && !lang.hasSkDub && !lang.hasEnAudio && (lang.weakCz || lang.weakSk || lang.weakEn)) { score+=8; reasons.push('weak language marker +8'); }
 
   if (quality==='4K') { score+=30; reasons.push('4K +30'); }
   else if (quality==='1080p') { score+=20; reasons.push('1080p +20'); }
