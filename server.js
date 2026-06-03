@@ -6,7 +6,7 @@ const app = express();
 app.use(cors({ origin: '*' }));
 app.use(express.json());
 
-const VERSION = '5.0.0-beta';
+const VERSION = '5.1.0-beta';
 const BASE_URL = (process.env.BASE_URL || '').replace(/\/$/, '');
 const FASTSHARE_API = process.env.FASTSHARE_API || 'https://fastshare.cz/api/api_kodi.php';
 const USERNAME = process.env.FASTSHARE_USERNAME || '';
@@ -17,10 +17,10 @@ const ADULT = process.env.FASTSHARE_ADULT || '0';
 let authCache = { hash: process.env.FASTSHARE_HASH || '', ts: process.env.FASTSHARE_HASH ? Date.now() : 0 };
 
 const manifest = {
-  id: 'community.fastshare.kodiapi.streams.v50beta',
+  id: 'community.fastshare.kodiapi.streams.v51beta',
   version: VERSION,
   name: 'FastShare Kodi API',
-  description: 'FastShare stream addon with v5 Smart Ranking Engine: CZ > SK > EN, size/runtime weights, duplicates cleanup and series matching.',
+  description: 'FastShare stream addon v5.1 Smart Matching Fix: stronger year/sequel filtering, multi-audio detection, CZ > SK > EN ranking.',
   logo: 'https://www.stremio.com/website/stremio-logo-small.png',
   resources: [{ name: 'stream', types: ['movie', 'series'], idPrefixes: ['tt'] }],
   types: ['movie', 'series'],
@@ -41,7 +41,7 @@ async function login(force = false) {
   }
   if (!USERNAME || !PASSWORD) return { ok: false, error: 'Missing FASTSHARE_USERNAME/FASTSHARE_PASSWORD or FASTSHARE_HASH' };
   const url = `${FASTSHARE_API}?process=login&login=${encodeURIComponent(USERNAME)}&password=${encodeURIComponent(PASSWORD)}`;
-  const r = await fetch(url, { headers: { 'User-Agent': 'Kodi/21 FastShare Stremio Addon/5.0' } });
+  const r = await fetch(url, { headers: { 'User-Agent': 'Kodi/21 FastShare Stremio Addon/5.1' } });
   const text = await r.text();
   let json;
   try { json = JSON.parse(text); } catch { return { ok: false, status: r.status, error: 'Invalid JSON', preview: text.slice(0, 400) }; }
@@ -129,7 +129,7 @@ async function searchFastShare(term) {
   ];
   let best = { auth, status: 0, files: [], resultCount: 0, attempts: [] };
   for (const apiUrl of attempts) {
-    const r = await fetch(apiUrl, { headers: { 'User-Agent': 'Kodi/21 FastShare Stremio Addon/5.0', 'Cookie': `FASTSHARE=${auth.hash}` } });
+    const r = await fetch(apiUrl, { headers: { 'User-Agent': 'Kodi/21 FastShare Stremio Addon/5.1', 'Cookie': `FASTSHARE=${auth.hash}` } });
     const text = await r.text();
     let json = null; try { json = JSON.parse(text); } catch {}
     const filesRaw = json?.search?.file || json?.search?.files || json?.file || json?.files || [];
@@ -159,28 +159,42 @@ function detectLanguageInfo(name) {
   const original = String(name || '').replace(/&amp;/g, '&');
   const s = ` ${normalizeTitle(original).toLowerCase()} `;
 
-  const hasCzSubs = /(\bcz\s*(tit|title|titles|sub|subs|subtitle|subtitles)\b|\b(czech|cesk|cesky|ceske)\s*(tit|title|sub|subs|subtitle|subtitles)\b|\bcz\s*titulky\b)/i.test(s);
-  const hasSkSubs = /(\bsk\s*(tit|title|titles|sub|subs|subtitle|subtitles)\b|\b(slovak|slovensk|slovensky|slovenske)\s*(tit|title|sub|subs|subtitle|subtitles)\b|\bsk\s*titulky\b)/i.test(s);
-  const hasEnSubs = /(\b(en|eng|english)\s*(tit|title|titles|sub|subs|subtitle|subtitles)\b)/i.test(s);
+  // Normalize common language aliases used in FastShare filenames.
+  // Important: plain "cz" is NOT enough for CZ dabing. It may mean subtitles or just uploader tag.
+  const czToken = String.raw`(?:cz|cs|cze|ces|czech|cesky|ceske|cesky)`;
+  const skToken = String.raw`(?:sk|svk|slk|slovak|slovensky|slovenske)`;
+  const enToken = String.raw`(?:en|eng|english|anglicky|anglicke)`;
 
-  // Explicit audio/dubbing only. Plain CZ/SK is a weak marker, not proof of dabing.
-  const hasCzDub = /(czdab|cz\s*dab|cz\s*dabing|dabing\s*cz|cz\s*audio|cz\s*zvuk|czech\s*(audio|dub|dabing)|cesk[yae]*\s*dabing|cesk[yae]*\s*zvuk)/i.test(s);
-  const hasSkDub = /(skdab|sk\s*dab|sk\s*dabing|dabing\s*sk|sk\s*audio|sk\s*zvuk|slovak\s*(audio|dub|dabing)|slovensk[yae]*\s*dabing|slovensk[yae]*\s*zvuk)/i.test(s);
-  const hasEnAudio = /(\ben\s*(dabing|audio|dub)\b|\beng\s*(audio|dub|dabing)\b|english\s*(audio|dub|dabing)|anglick[yy]*\s*(zvuk|dabing)|original\s*(audio|zvuk)?|\borig\b)/i.test(s);
-  const hasMulti = /(multi|dual|dual\s*audio|dualaudio|2audio|multi\s*audio|cz\+sk|sk\+cz)/i.test(s);
+  const hasCzSubs = new RegExp(`\b${czToken}\s*(?:tit|title|titles|sub|subs|subtitle|subtitles|forced|titulky)\b|\b(?:tit|title|subs|subtitles|titulky)\s*${czToken}\b`, 'i').test(s);
+  const hasSkSubs = new RegExp(`\b${skToken}\s*(?:tit|title|titles|sub|subs|subtitle|subtitles|forced|titulky)\b|\b(?:tit|title|subs|subtitles|titulky)\s*${skToken}\b`, 'i').test(s);
+  const hasEnSubs = new RegExp(`\b${enToken}\s*(?:tit|title|titles|sub|subs|subtitle|subtitles)\b|\b(?:tit|title|subs|subtitles)\s*${enToken}\b`, 'i').test(s);
 
-  const weakCz = !hasCzSubs && !hasCzDub && /(\bcz\b|\bczech\b|\bcesk[yy]?\b)/i.test(s);
-  const weakSk = !hasSkSubs && !hasSkDub && /(\bsk\b|\bslovak\b|\bslovensk[yy]?\b)/i.test(s);
-  const weakEn = !hasEnSubs && !hasEnAudio && /(\ben\b|\beng\b|\benglish\b)/i.test(s);
+  const hasCzDub = new RegExp(`\b${czToken}\s*(?:dab|dub|dabing|audio|zvuk)\b|\b(?:dab|dub|dabing|audio|zvuk)\s*${czToken}\b`, 'i').test(s);
+  const hasSkDub = new RegExp(`\b${skToken}\s*(?:dab|dub|dabing|audio|zvuk)\b|\b(?:dab|dub|dabing|audio|zvuk)\s*${skToken}\b`, 'i').test(s);
+  const hasEnAudio = new RegExp(`\b${enToken}\s*(?:dab|dub|dabing|audio|zvuk)\b|\b(?:dab|dub|dabing|audio|zvuk)\s*${enToken}\b|\boriginal\s*(?:audio|zvuk)?\b|\borig\b`, 'i').test(s);
+
+  // Multi / dual audio patterns: CZ EN, ENG+CZE, Cs+En-Dab+Tit, audio CZE-ENG-SPA-HUN, etc.
+  const hasCzMarker = new RegExp(`\b${czToken}\b`, 'i').test(s);
+  const hasSkMarker = new RegExp(`\b${skToken}\b`, 'i').test(s);
+  const hasEnMarker = new RegExp(`\b${enToken}\b`, 'i').test(s);
+  const hasAudioContext = /\b(audio|dab|dub|dabing|zvuk|5\.1|6ch|ac3|dts|remux|dual|multi)\b/i.test(s);
+  const hasMulti = /(multi|dual|dual\s*audio|dualaudio|2audio|multi\s*audio|cz\+sk|sk\+cz|cz\s*[,;+\-]\s*en|en\s*[,;+\-]\s*cz|cze\s*[,;+\-]\s*eng|eng\s*[,;+\-]\s*cze|cs\s*[,;+\-]\s*en|en\s*[,;+\-]\s*cs)/i.test(s) || (hasAudioContext && ((hasCzMarker && hasEnMarker) || (hasSkMarker && hasEnMarker) || (hasCzMarker && hasSkMarker)));
+
+  const weakCz = !hasCzSubs && !hasCzDub && hasCzMarker;
+  const weakSk = !hasSkSubs && !hasSkDub && hasSkMarker;
+  const weakEn = !hasEnSubs && !hasEnAudio && hasEnMarker;
 
   const labels = [];
-  if ((hasCzDub && hasSkDub) || /cz\+sk|sk\+cz/i.test(s)) labels.push('CZ/SK Dabing');
-  else {
+  if (hasMulti) {
+    if (hasCzMarker && hasSkMarker && !hasEnMarker) labels.push('CZ/SK Dabing');
+    else if (hasCzMarker && hasEnMarker) labels.push('CZ/EN Audio');
+    else if (hasSkMarker && hasEnMarker) labels.push('SK/EN Audio');
+    else labels.push('Multi Audio');
+  } else {
     if (hasCzDub) labels.push('CZ Dabing');
     if (hasSkDub) labels.push('SK Dabing');
+    if (hasEnAudio) labels.push('EN Audio');
   }
-  if (hasEnAudio) labels.push('EN Audio');
-  if (hasMulti && !labels.some(x => /CZ\/SK/.test(x))) labels.push('Multi Audio');
 
   const subLabels = [];
   if (hasCzSubs) subLabels.push('CZ titulky');
@@ -188,22 +202,37 @@ function detectLanguageInfo(name) {
   if (hasEnSubs) subLabels.push('EN titulky');
 
   let language = '';
-  if (hasCzDub && hasSkDub) language = 'CZ/SK';
-  else if (hasCzDub) language = 'CZ';
+  if (hasMulti) {
+    if (hasCzMarker && hasSkMarker && !hasEnMarker) language = 'CZ/SK';
+    else if (hasCzMarker && hasEnMarker) language = 'CZ/EN';
+    else if (hasSkMarker && hasEnMarker) language = 'SK/EN';
+    else language = 'MULTI';
+  } else if (hasCzDub) language = 'CZ';
   else if (hasSkDub) language = 'SK';
   else if (hasEnAudio) language = 'EN';
-  else if (hasMulti) language = 'MULTI';
   else if (weakCz) language = 'CZ?';
   else if (weakSk) language = 'SK?';
   else if (weakEn) language = 'EN?';
 
-  return { language, label: labels.join(' + '), subtitles: subLabels.join(' + '), hasCzDub, hasSkDub, hasEnAudio, hasMulti, hasCzSubs, hasSkSubs, hasEnSubs, weakCz, weakSk, weakEn };
+  return { language, label: labels.join(' + '), subtitles: subLabels.join(' + '), hasCzDub, hasSkDub, hasEnAudio, hasMulti, hasCzSubs, hasSkSubs, hasEnSubs, weakCz, weakSk, weakEn, hasCzMarker, hasSkMarker, hasEnMarker };
 }
 
 function isSeriesLikeName(name) { return /\b(s\d{1,2}e\d{1,3}|\d{1,2}x\d{1,3}|season\s*\d+|epizod|episode|diel|serie|seria)\b/i.test(String(name || '')); }
 function containsEpisode(name, ep) { if (!ep) return false; const s=String(name||'').toLowerCase(); const se=String(ep.season).padStart(2,'0'); const ee=String(ep.episode).padStart(2,'0'); return [new RegExp(`s0?${ep.season}e0?${ep.episode}\\b`,'i'), new RegExp(`\\b0?${ep.season}x0?${ep.episode}\\b`,'i'), new RegExp(`s${se}e${ee}`,'i')].some(r=>r.test(s)); }
 function cleanTitleTokens(title) { return normalizeTitle(title).toLowerCase().replace(/\b(the|a|an|and|of|to|in|na|o)\b/g,' ').split(' ').map(x=>x.trim()).filter(x=>x.length>2); }
 function hasDifferentYear(name, wantedYear) { if (!wantedYear) return false; const years=[...String(name).matchAll(/\b(19\d{2}|20\d{2})\b/g)].map(m=>m[1]); return years.length>0 && !years.includes(String(wantedYear)); }
+function hasSequelMismatch(name, meta) {
+  const title = normalizeTitle(meta.title || '').toLowerCase();
+  const s = normalizeTitle(name || '').toLowerCase();
+  if (!title) return false;
+  // Avatar (2009) should not match Avatar 2 / Way of Water / Fire and Ash.
+  // Generic rule: requested title followed by a sequel number or known subtitle is suspicious unless it is explicitly the requested title.
+  const escaped = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (new RegExp(`\b${escaped}\s*(?:2|ii|3|iii|4|iv)\b`, 'i').test(s) && !/\bavatar\s*1\b/i.test(s)) return true;
+  if (/\b(the way of water|cesta vody|fire and ash|ohen a popel|oheň a popel|last airbender|legenda o aangovi)\b/i.test(s) && !/way of water|cesta vody|fire and ash|ohen a popel|oheň a popel/i.test(title)) return true;
+  return false;
+}
+
 
 function parseRuntimeMinutes(raw) {
   if (!raw) return 0;
@@ -266,7 +295,8 @@ function smartScoreFile(file, meta, type, id) {
     if(tokens.length){const pts=Math.round((matched/tokens.length)*60); score+=pts; reasons.push(`title-tokens +${pts}`);}
   }
   if (year && name.includes(year)) { score+=50; reasons.push('year +50'); }
-  if (hasDifferentYear(original,year)) { score-=60; reasons.push('different-year -60'); }
+  if (hasDifferentYear(original,year)) { score-=200; reasons.push('different-year -200'); }
+  if (type==='movie' && hasSequelMismatch(original, meta)) { score-=220; reasons.push('sequel-mismatch -220'); }
 
   if (type==='movie' && isSeriesLikeName(original)) { score-=120; reasons.push('series-like movie penalty -120'); }
   if (type==='series') {
@@ -278,7 +308,11 @@ function smartScoreFile(file, meta, type, id) {
   if (lang.hasCzDub) { score+=100; reasons.push('CZ dabing +100'); }
   if (lang.hasSkDub) { score+=80; reasons.push('SK dabing +80'); }
   if (lang.hasEnAudio) { score+=40; reasons.push('EN audio +40'); }
-  if (lang.hasMulti) { score+=30; reasons.push('multi audio +30'); }
+  if (lang.hasMulti) {
+    if (lang.hasCzMarker) { score+=90; reasons.push('multi with CZ +90'); }
+    else if (lang.hasSkMarker) { score+=70; reasons.push('multi with SK +70'); }
+    else { score+=30; reasons.push('multi audio +30'); }
+  }
   if (lang.hasCzSubs) { score+=15; reasons.push('CZ subtitles +15'); }
   if (lang.hasSkSubs) { score+=12; reasons.push('SK subtitles +12'); }
   if (lang.hasEnSubs) { score+=4; reasons.push('EN subtitles +4'); }
@@ -305,7 +339,7 @@ function dedupeRankedFiles(files) {
   for(const f of files){
     const q=detectQuality(f.name)||'auto';
     const lang=detectLanguageInfo(f.name).language||'any';
-    const ep = String(f.name).match(/(s\d{1,2}e\d{1,3}|\d{1,2}x\d{1,3})/i)?.[1]?.toLowerCase() || '';
+    const ep = String(f.name).match(/\b(s\d{1,2}e\d{1,3}|\d{1,2}x\d{1,3})\b/i)?.[1]?.toLowerCase() || '';
     let rough=normalizeTitle(f.name).toLowerCase()
       .replace(/&amp;/g,' ')
       .replace(/\b(2160p|1080p|720p|480p|4k|uhd|uhdr|fhd|fullhd|bdrip|bluray|webdl|webrip|hdrip|dvdrip)\b/g,' ')
@@ -348,6 +382,9 @@ async function buildStreams(type,id,debug=false){
     if(all.length>=MAX_RESULTS*3) break;
   }
   let rankedAll=all.map(f=>{const ss=smartScoreFile(f,meta,type,id); return {...f,score:ss.score,scoreReasons:ss.reasons};}).sort((a,b)=>b.score-a.score);
+  if(type==='movie') {
+    rankedAll = rankedAll.filter(f => !f.scoreReasons.includes('sequel-mismatch -220') && f.score > 80);
+  }
   if(type==='series'){ const ep=getRequestedEpisode(id)||(meta.season&&meta.episode?{season:meta.season,episode:meta.episode}:null); if(ep){ const epMatches=rankedAll.filter(f=>containsEpisode(f.name,ep)); rankedAll=epMatches.length?epMatches:[]; } }
   const ranked=dedupeRankedFiles(rankedAll).slice(0,MAX_RESULTS).map((f,i)=>({...f,recommended:i===0})); const streams=auth.ok?ranked.map(f=>makeStream(f,auth.hash)):[];
   if(!debug) return { streams };

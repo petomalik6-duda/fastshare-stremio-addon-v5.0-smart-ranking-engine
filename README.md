@@ -1,38 +1,34 @@
-# FastShare Stremio Addon v5.0 beta Language Priority
+# FastShare Stremio Addon v5.1 Smart Matching Fix
 
-Používa FastShare Kodi API.
+Fixes v5.0 ranking:
+- stronger different-year penalty (`-200`)
+- filters sequel mismatch, e.g. Avatar 2 / Fire and Ash when opening Avatar 2009
+- better CZE/CS/ENG multi-audio detection
+- detects `SK dub`, `ENG+CZE`, `Cs+En-Dab+Tit`, `audio CZE-ENG-SPA-HUN`
+- keeps playback mode from working v5.0/direct stream
 
-## Render env
+## Render
+
+Environment:
 
 ```text
+NODE_VERSION=20
 PORT=10000
-BASE_URL=https://tvoja-sluzba.onrender.com
-FASTSHARE_USERNAME=tvoje_meno
-FASTSHARE_PASSWORD=tvoje_heslo
+BASE_URL=https://your-app.onrender.com
+FASTSHARE_USERNAME=your_login
+FASTSHARE_PASSWORD=your_password
 FASTSHARE_PLAYBACK_MODE=direct_stream
 FASTSHARE_MAX_RESULTS=12
 ```
 
-Voliteľne namiesto mena/hesla:
+Build command:
 
 ```text
-FASTSHARE_HASH=...
+npm install --omit=dev --no-audit --no-fund
 ```
 
-## Testy
+Start command:
 
 ```text
-/health
-/manifest.json
-/debug/login
-/debug/search?term=avatar
-/debug/stream/movie/tt0499549.json
+npm start
 ```
-
-## v5.0 beta
-
-- zjednotené označenia: CZ Dabing, SK Dabing, EN Audio, CZ/SK titulky
-- `cz title`, `cz tit`, `cz subs` už nie je dabing
-- priorita výsledkov: CZ Dabing > SK Dabing > EN Audio > neznáme
-- v rámci rovnakého jazyka: 4K > 1080p > 720p, MKV > MP4 > AVI
-- kvalitné EN/4K výsledky sa nezahadzujú
