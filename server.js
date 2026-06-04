@@ -7,7 +7,7 @@ app.use(cors({ origin: '*' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
-const VERSION = '6.2.3';
+const VERSION = '6.2.2';
 const PORT = process.env.PORT || 10000;
 const BASE_URL = (process.env.BASE_URL || '').replace(/\/$/, '');
 const API = 'https://fastshare.cz/api/api_kodi.php';
@@ -22,11 +22,11 @@ function encodeConfig(obj) {
 
 function decodeConfig(str) {
   try {
-    return JSON.parse(Buffer.from(String(str || ''), 'base64url').toString('utf8'));
+    return JSON.parse(Buffer.from(str || '', 'base64url').toString('utf8'));
   } catch {
     try {
-      const b64 = String(str || '').replace(/-/g, '+').replace(/_/g, '/');
-      return JSON.parse(Buffer.from(b64, 'base64').toString('utf8'));
+      const padded = String(str || '').replace(/-/g, '+').replace(/_/g, '/');
+      return JSON.parse(Buffer.from(padded, 'base64').toString('utf8'));
     } catch {
       return {};
     }
@@ -51,12 +51,11 @@ function normalize(s) {
     .trim();
 }
 
-function cleanWords(s) {
+function words(s) {
   const stop = new Set([
     'the','a','an','and','or','of','to','in','on','at','with','for','from',
     'cz','sk','en','eng','dabing','dab','audio','tit','title','subs','sub',
-    'mkv','mp4','avi','1080p','720p','2160p','4k','hd','uhd','fhd','fullhd',
-    'bluray','bdrip','webrip','web','dl','x264','x265','h264','h265'
+    'mkv','mp4','avi','1080p','720p','2160p','4k','hd','uhd','fhd','bluray'
   ]);
   return normalize(s).split(/\s+/).filter(w => w && w.length > 1 && !stop.has(w));
 }
@@ -90,12 +89,13 @@ function durationText(seconds) {
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
   const sec = Math.floor(s % 60);
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
 }
 
 function detectAudio(name) {
   const n = normalize(name);
 
+  // Titulky najprv. Samotné CZ/SK pri titulkoch nikdy nesmie znamenať audio.
   const czSubs = /\b(cz\s*tit|cztit|cz\s*titulky|cz\s*sub|cz\s*subs|cz\s*subtitle|cz\s*title|czforced|czech\s*subs|ceske\s*titulky)\b/.test(n);
   const skSubs = /\b(sk\s*tit|sktit|sk\s*titulky|sk\s*sub|sk\s*subs|sk\s*subtitle|sk\s*title|slovak\s*subs|slovenske\s*titulky)\b/.test(n);
 
@@ -116,23 +116,20 @@ function detectAudio(name) {
   else if (hasSkToken && hasEn && !skSubs) { label = 'SK/EN Audio'; lang = 'SKEN'; score = 65; }
   else if (hasEn) { label = 'EN Audio'; lang = 'EN'; score = 35; }
   else if (/\b(multi\s*audio|dual\s*audio|dual)\b/.test(n)) { label = 'Multi Audio'; lang = 'MULTI'; score = 25; }
-  else if (czSubs) { label = 'CZ titulky'; lang = 'SUB'; score = 5; }
-  else if (skSubs) { label = 'SK titulky'; lang = 'SUB'; score = 5; }
-  else if (hasCzToken) { label = 'CZ neoverené'; lang = 'CZ'; score = 15; }
-  else if (hasSkToken) { label = 'SK neoverené'; lang = 'SK'; score = 12; }
 
   const subs = [];
-  if (czSubs && label !== 'CZ titulky') subs.push('CZ titulky');
-  if (skSubs && label !== 'SK titulky') subs.push('SK titulky');
-  if (czSubs && label !== 'CZ titulky') score += 18;
-  if (skSubs && label !== 'SK titulky') score += 12;
+  if (czSubs) subs.push('CZ titulky');
+  if (skSubs) subs.push('SK titulky');
+
+  if (czSubs) score += 18;
+  if (skSubs) score += 12;
 
   return { label, lang, subs, score };
 }
 
 async function getMeta(type, id) {
   try {
-    const res = await fetch(`https://v3-cinemeta.strem.io/meta/${type}/${encodeURIComponent(id)}.json`, { timeout: 12000 });
+    const res = await fetch(`https://v3-cinemeta.strem.io/meta/${type}/${encodeURIComponent(id)}.json`);
     const j = await res.json();
     const m = j.meta || {};
     return {
@@ -150,11 +147,22 @@ async function getMeta(type, id) {
 
 async function fastshareLogin(username, password) {
   if (!username || !password) return { ok: false, reason: 'missing credentials' };
-  const params = new URLSearchParams({ process: 'login', kodi: '1', username, password });
-  const res = await fetch(`${API}?${params.toString()}`, { headers: { 'user-agent': 'Kodi/20 FastShare Stremio Addon' } });
+
+  const params = new URLSearchParams({
+    process: 'login',
+    kodi: '1',
+    username,
+    password
+  });
+
+  const res = await fetch(`${API}?${params.toString()}`, {
+    headers: { 'user-agent': 'Kodi/20 FastShare Stremio Addon' }
+  });
+
   const text = await res.text();
   let json = null;
   try { json = JSON.parse(text); } catch {}
+
   const hash = json?.login?.hash || json?.hash || json?.user?.hash || json?.status?.hash || null;
   if (hash) return { ok: true, hash, source: 'login', status: res.status };
   return { ok: false, status: res.status, preview: text.slice(0, 500), json };
@@ -176,16 +184,23 @@ async function getHash(cfg) {
     authCache = { key, hash: login.hash, ts: Date.now() };
     return { ok: true, hash: login.hash, source: 'login' };
   }
+
   return login;
 }
 
 async function searchFastshare(term, hash) {
-  const params = new URLSearchParams({ process: 'search', pagination: '200', term, adult: '0' });
+  const params = new URLSearchParams({
+    process: 'search',
+    pagination: '200',
+    term,
+    adult: '0'
+  });
   if (hash) params.set('hash', hash);
 
   const url = `${API}?${params.toString()}`;
   const res = await fetch(url, { headers: { 'user-agent': 'Kodi/20 FastShare Stremio Addon' } });
   const text = await res.text();
+
   let json = null;
   try { json = JSON.parse(text); } catch {}
 
@@ -193,13 +208,13 @@ async function searchFastshare(term, hash) {
   const files = (Array.isArray(arr) ? arr : [arr]).filter(Boolean).map(f => {
     const size = Number(f?.data?.value || f?.size || 0);
     const name = f.filename || f.name || '';
-    const fileUrl = f.download_url || f.url || '';
+    const url = f.download_url || f.url || '';
     const dur = Number(f?.duration?.value || 0);
     return {
       id: String(f.id || ''),
       name,
       size,
-      url: fileUrl,
+      url,
       image: f.thumbnail || f.image || '',
       duration: dur,
       durationText: f.duration_f || durationText(dur),
@@ -210,12 +225,13 @@ async function searchFastshare(term, hash) {
   return { status: res.status, apiUrl: url, resultCount: files.length, files, preview: text.slice(0, 500) };
 }
 
-function addKnownAliases(meta, terms) {
+function addWinterSokchoAliases(meta, terms) {
   const n = normalize(`${meta.title} ${meta.raw?.originalTitle || ''} ${meta.raw?.name || ''}`);
   if (
     meta.imdbId === 'tt30519830' ||
     n.includes('winter in sokcho') ||
     n.includes('hiver a sokcho') ||
+    n.includes('hiver sokcho') ||
     n.includes('sokcho')
   ) {
     terms.push('Winter in Sokcho');
@@ -229,58 +245,63 @@ function addKnownAliases(meta, terms) {
 function buildTerms(meta) {
   const terms = [];
   const title = meta.title || '';
-  const w = cleanWords(title);
+  const w = words(title);
+
   if (title && meta.year) terms.push(`${title} ${meta.year}`);
   if (title) terms.push(title);
   if (w.length >= 2) terms.push(w.join(' '));
   if (w.length > 2) terms.push(w.slice(0, 3).join(' '));
-  if (w.length >= 1) terms.push(w[w.length - 1]);
-  addKnownAliases(meta, terms);
+
+  addWinterSokchoAliases(meta, terms);
+
   return [...new Set(terms.filter(Boolean))];
 }
 
-function titleScore(fileName, meta) {
-  const n = normalize(fileName);
+function titleMatchScore(name, meta) {
+  const n = normalize(name);
   const title = normalize(meta.title);
-  const tw = cleanWords(meta.title);
-  const nw = new Set(cleanWords(fileName));
+  const titleWords = words(meta.title);
+  const nameWords = new Set(words(name));
 
-  const isWinter = meta.imdbId === 'tt30519830' || title.includes('winter in sokcho') || title.includes('hiver a sokcho');
-  if (isWinter) {
-    const hasSokcho = nw.has('sokcho') || n.includes('sokcho');
-    const hasWinter = nw.has('winter') || n.includes('winter');
-    const hasHiver = nw.has('hiver') || n.includes('hiver');
-    if (hasSokcho && (hasWinter || hasHiver)) return { score: 150, reason: 'winter-sokcho-alias +150' };
-    if (hasSokcho) return { score: 90, reason: 'sokcho-fallback +90' };
+  const isWinterSokcho =
+    meta.imdbId === 'tt30519830' ||
+    title.includes('winter in sokcho') ||
+    title.includes('hiver a sokcho');
+
+  if (isWinterSokcho) {
+    const hasSokcho = nameWords.has('sokcho');
+    const hasWinter = nameWords.has('winter');
+    const hasHiver = nameWords.has('hiver');
+    if (hasSokcho && (hasWinter || hasHiver)) return { score: 120, reason: 'winter-sokcho-alias +120' };
+    if (hasSokcho) return { score: 70, reason: 'sokcho-fallback +70' };
   }
 
   if (!title) return { score: 0, reason: 'no-title' };
-  if (n.includes(title)) return { score: 120, reason: 'title-phrase +120' };
+  if (n.includes(title)) return { score: 110, reason: 'title-phrase +110' };
 
-  if (tw.length >= 2) {
-    const matched = tw.filter(w => nw.has(w) || n.includes(w)).length;
-    const ratio = matched / tw.length;
-    if (ratio >= 0.67) return { score: 80, reason: 'relaxed-title +80' };
-    if (matched > 0) return { score: matched * 35, reason: `partial-title +${matched * 35}` };
-    return { score: -80, reason: 'title-mismatch -80' };
+  if (titleWords.length >= 2) {
+    const matched = titleWords.filter(w => nameWords.has(w)).length;
+    const ratio = matched / titleWords.length;
+    if (ratio >= 0.60) return { score: 65, reason: 'relaxed-title +65' };
+    return { score: -160, reason: 'title-mismatch -160' };
   }
 
-  const one = tw[0];
-  if (one && (nw.has(one) || n.includes(one))) return { score: 45, reason: 'single-word-title +45' };
-  return { score: -80, reason: 'single-word-mismatch -80' };
+  const one = titleWords[0];
+  if (one && nameWords.has(one)) return { score: 40, reason: 'single-word-title +40' };
+  return { score: -160, reason: 'single-word-mismatch -160' };
 }
 
-function hasBadYear(fileName, meta) {
-  const n = normalize(fileName);
+function hasBadYear(name, meta) {
+  const n = normalize(name);
   const y = n.match(/\b(19\d{2}|20\d{2})\b/);
   return Boolean(meta.year && y && y[1] !== meta.year);
 }
 
-function sequelMismatch(fileName, meta) {
-  const tw = cleanWords(meta.title);
-  if (tw.length !== 1) return false;
-  const t = tw[0];
-  const n = normalize(fileName);
+function sequelMismatch(name, meta) {
+  const titleWords = words(meta.title);
+  if (titleWords.length !== 1) return false;
+  const t = titleWords[0];
+  const n = normalize(name);
   return new RegExp(`\\b${t}\\s*(2|3|4|5|ii|iii|iv|v)\\b`).test(n);
 }
 
@@ -289,13 +310,13 @@ function scoreFile(file, meta, type) {
   const reasons = [];
   const n = normalize(file.name);
 
-  const ts = titleScore(file.name, meta);
-  score += ts.score; reasons.push(ts.reason);
+  const tm = titleMatchScore(file.name, meta);
+  score += tm.score; reasons.push(tm.reason);
 
   if (meta.year && n.includes(meta.year)) { score += 60; reasons.push('year +60'); }
-  if (hasBadYear(file.name, meta)) { score -= 220; reasons.push('different-year -220'); }
-  if (type === 'movie' && sequelMismatch(file.name, meta)) { score -= 220; reasons.push('sequel-mismatch -220'); }
-  if (type === 'movie' && /\b(s\d{1,2}e\d{1,2}|\d{1,2}x\d{1,2})\b/.test(n)) { score -= 220; reasons.push('episode-in-movie -220'); }
+  if (hasBadYear(file.name, meta)) { score -= 260; reasons.push('different-year -260'); }
+  if (type === 'movie' && sequelMismatch(file.name, meta)) { score -= 260; reasons.push('sequel-mismatch -260'); }
+  if (type === 'movie' && /\b(s\d{1,2}e\d{1,2}|\d{1,2}x\d{1,2})\b/.test(n)) { score -= 260; reasons.push('episode-in-movie -260'); }
 
   const audio = detectAudio(file.name);
   score += audio.score; reasons.push(`${audio.label} +${audio.score}`);
@@ -318,7 +339,7 @@ function scoreFile(file, meta, type) {
   else if (gb > 1) { score += 5; reasons.push('size >1GB +5'); }
 
   if (/\b(cam|ts|hdcam|telesync|trailer|ukazka)\b/.test(n)) { score -= 150; reasons.push('bad-quality -150'); }
-  if (type === 'movie' && file.size && file.size < 200 * 1024 * 1024) { score -= 140; reasons.push('too-small-movie -140'); }
+  if (type === 'movie' && file.size && file.size < 200 * 1024 * 1024) { score -= 180; reasons.push('too-small-movie -180'); }
 
   return { ...file, score, reasons, audio, quality: q, ext, sizeText: sizeText(file.size) };
 }
@@ -331,16 +352,18 @@ function makeStreamUrl(file, hash) {
 
 function makeManifest(configPath = '') {
   return {
-    id: configPath ? 'community.fastshare.smart.streams.v623.configured' : 'community.fastshare.smart.streams.v623',
+    id: configPath ? 'community.fastshare.smart.streams.v622.configured' : 'community.fastshare.smart.streams.v622',
     version: VERSION,
     name: configPath ? 'FastShare Smart' : 'FastShare Smart Configure',
-    description: 'FastShare stream addon with relaxed fallback and strict subtitles/audio detection.',
+    description: 'FastShare stream addon with Winter in Sokcho aliases and strict subtitles/audio detection.',
     logo: 'https://www.stremio.com/website/stremio-logo-small.png',
     resources: [{ name: 'stream', types: ['movie', 'series'], idPrefixes: ['tt'] }],
     types: ['movie', 'series'],
     catalogs: [],
     idPrefixes: ['tt'],
-    behaviorHints: configPath ? { configurable: false, configurationRequired: false } : { configurable: true, configurationRequired: true },
+    behaviorHints: configPath
+      ? { configurable: false, configurationRequired: false }
+      : { configurable: true, configurationRequired: true },
     config: [
       { key: 'username', type: 'text', title: 'FastShare username' },
       { key: 'password', type: 'password', title: 'FastShare password' }
@@ -398,54 +421,46 @@ app.get('/manifest.json', (req, res) => res.json(makeManifest('')));
 app.get('/:config/manifest.json', (req, res) => res.json(makeManifest(req.params.config)));
 
 async function handleStream(req, res, debug = false) {
-  try {
-    const cfg = getConfig(req);
-    const { type, id } = req.params;
-    const realId = String(id || '').split(':')[0];
-    const meta = await getMeta(type, realId);
-    const auth = await getHash(cfg);
+  const cfg = getConfig(req);
+  const { type, id } = req.params;
+  const realId = String(id || '').split(':')[0];
+  const meta = await getMeta(type, realId);
+  const auth = await getHash(cfg);
 
-    if (!auth.ok) return res.json(debug ? { ok: true, version: VERSION, auth, streams: [] } : { streams: [] });
+  if (!auth.ok) return res.json(debug ? { ok: true, version: VERSION, auth, streams: [] } : { streams: [] });
 
-    const terms = buildTerms(meta);
-    const search = [];
-    let all = [];
-    for (const term of terms) {
-      const s = await searchFastshare(term, auth.hash);
-      search.push({ term, status: s.status, resultCount: s.resultCount, apiUrl: s.apiUrl, firstFiles: s.files.slice(0, 3) });
-      all.push(...s.files);
-    }
-
-    const seen = new Set();
-    let scored = all
-      .filter(f => !seen.has(f.id) && seen.add(f.id))
-      .map(f => scoreFile(f, meta, type))
-      .sort((a, b) => b.score - a.score);
-
-    let ranked = scored.filter(f => f.score > 0);
-    if (ranked.length === 0) {
-      ranked = scored.filter(f => f.score > -100).slice(0, 15);
-    }
-    ranked = ranked.slice(0, cfg.maxStreams || 25);
-
-    const streams = ranked.map((f, idx) => {
-      const info = [f.quality, f.sizeText, f.ext, f.durationText].filter(Boolean).join(' • ');
-      const audioLine = [f.audio.label, ...(f.audio.subs || [])].filter(Boolean).join(' • ');
-      return {
-        name: `FastShare ${f.audio.lang && f.audio.lang !== 'any' ? f.audio.lang : ''}`.trim(),
-        title: `${idx === 0 ? '⭐ Odporúčané\n' : ''}${f.name}\n${info}\n${audioLine}`,
-        url: makeStreamUrl(f, auth.hash),
-        behaviorHints: { bingeGroup: `fastshare-${f.quality || 'auto'}-${f.audio.lang || 'any'}` }
-      };
-    });
-
-    if (debug) {
-      return res.json({ ok: true, version: VERSION, request: { type, id }, meta, terms, auth: { ok: true, source: auth.source, hasHash: !!auth.hash }, search, streamCount: streams.length, files: ranked, streams });
-    }
-    return res.json({ streams });
-  } catch (e) {
-    return res.json(debug ? { ok: false, version: VERSION, error: String(e && e.stack || e) } : { streams: [] });
+  const terms = buildTerms(meta);
+  const search = [];
+  let all = [];
+  for (const term of terms) {
+    const s = await searchFastshare(term, auth.hash);
+    search.push({ term, status: s.status, resultCount: s.resultCount, apiUrl: s.apiUrl, firstFiles: s.files.slice(0, 3) });
+    all.push(...s.files);
   }
+
+  const seen = new Set();
+  let ranked = all
+    .filter(f => !seen.has(f.id) && seen.add(f.id))
+    .map(f => scoreFile(f, meta, type))
+    .filter(f => f.score > 10)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, cfg.maxStreams || 25);
+
+  const streams = ranked.map((f, idx) => {
+    const info = [f.quality, f.sizeText, f.ext, f.durationText].filter(Boolean).join(' • ');
+    const audioLine = [f.audio.label, ...(f.audio.subs || [])].filter(Boolean).join(' • ');
+    return {
+      name: `FastShare ${f.audio.lang && f.audio.lang !== 'any' ? f.audio.lang : ''}`.trim(),
+      title: `${idx === 0 ? '⭐ Odporúčané\n' : ''}${f.name}\n${info}\n${audioLine}`,
+      url: makeStreamUrl(f, auth.hash),
+      behaviorHints: { bingeGroup: `fastshare-${f.quality || 'auto'}-${f.audio.lang || 'any'}` }
+    };
+  });
+
+  if (debug) {
+    return res.json({ ok: true, version: VERSION, request: { type, id }, meta, terms, auth: { ok: true, source: auth.source, hasHash: !!auth.hash }, search, streamCount: streams.length, files: ranked, streams });
+  }
+  return res.json({ streams });
 }
 
 async function debugLogin(req, res) {

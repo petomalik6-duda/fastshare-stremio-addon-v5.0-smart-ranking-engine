@@ -1,7 +1,7 @@
 {
-  "name": "fastshare-stremio-addon-v623",
-  "version": "6.2.3",
-  "description": "FastShare Stremio addon with relaxed fallback and strict subtitles/audio detection.",
+  "name": "fastshare-stremio-addon-v622",
+  "version": "6.2.2",
+  "description": "FastShare Stremio addon with Winter in Sokcho aliases and strict subtitles/audio detection.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
