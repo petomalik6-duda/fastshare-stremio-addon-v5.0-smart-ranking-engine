@@ -1,6 +1,6 @@
 {
   "name": "fastshare-stremio-addon-v6-configurator",
-  "version": "6.0.0",
+  "version": "6.1.5",
   "description": "FastShare Stremio addon with configurator using FastShare Kodi API.",
   "main": "server.js",
   "scripts": { "start": "node server.js" },

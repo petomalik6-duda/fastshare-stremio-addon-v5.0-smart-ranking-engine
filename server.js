@@ -10,7 +10,7 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
 const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
-const VERSION = '6.1.4';
+const VERSION = '6.1.5';
 const API = 'https://fastshare.cz/api/api_kodi.php';
 const MAX_STREAMS = Number(process.env.MAX_STREAMS || 60);
 
@@ -120,6 +120,19 @@ function episodePatternScore(name, meta) {
   }
   return { score: 0, reason: null };
 }
+
+function unrelatedSeriesSpinOff(name, meta) {
+  if (meta.type !== 'series' || !meta.title) return false;
+  const n = normalize(name);
+  const title = normalize(meta.title);
+  // Example: searching Game of Thrones S01E01 can return House of the Dragon / Rod draka.
+  // If the file explicitly contains a different known show title before the target title in parentheses, reject it.
+  if (title.includes('game of thrones')) {
+    if (n.includes('house of the dragon') || n.includes('rod draka')) return true;
+  }
+  return false;
+}
+
 function seriesEpisodeMismatch(name, meta) {
   if (meta.type !== 'series' || !meta.season || !meta.episode) return false;
   const raw = String(name || '');
@@ -151,6 +164,9 @@ function titleMatchScore(fileName, meta, type) {
 
   if (type === 'movie' && hasEpisodePattern(fileName)) {
     return { reject: true, score: -999, reasons: ['movie-episode-pattern reject'] };
+  }
+  if (type === 'series' && unrelatedSeriesSpinOff(fileName, meta)) {
+    return { reject: true, score: -999, reasons: ['unrelated-series-spinoff reject'] };
   }
   if (type === 'series' && seriesEpisodeMismatch(fileName, meta)) {
     return { reject: true, score: -999, reasons: ['series-episode-mismatch reject'] };
@@ -264,7 +280,7 @@ function manifest(configToken = null) {
     name: 'FastShare Kodi API',
     description: 'FastShare streams using FastShare Kodi API. Configure with your own lawful account. Includes Stremio/Nuvio series routes.',
     logo: 'https://www.stremio.com/website/stremio-logo-small.png',
-    resources: [{ name: 'stream', types: ['movie','series'], idPrefixes: ['tt', ''] }],
+    resources: ['stream'],
     types: ['movie','series'],
     catalogs: [],
     idPrefixes: ['tt'],
@@ -363,34 +379,24 @@ function streamUrl(file, hash) {
   return `${base}${sep}stream=1&session=${esc(hash)}&${esc(file.name)}`;
 }
 function streamObj(file, hash, recommended) {
-  const size = bytesToHuman(file.size);
-  const bits = [file.quality, size, file.ext, file.durationText].filter(Boolean).join(' • ');
-  const lang = [file.audio.label, ...(file.audio.subs || [])].filter(Boolean).join(' • ');
-  const title = `${recommended ? '⭐ Odporúčané\n' : ''}${file.name}\n${bits}\n${lang}`;
-  return { name: `FastShare${file.audio.key !== 'any' ? ' ' + file.audio.key.replace('-', '/') : ''}`, title, url: streamUrl(file, hash), behaviorHints: { bingeGroup: `fastshare-${file.quality || 'auto'}-${file.audio.key}` } };
-}
+  const info = [file.quality, file.sizeText, file.ext, file.durationText].filter(Boolean).join(' • ');
+  const audioLine = [file.audio.label, ...(file.audio.subs || [])].filter(Boolean).join(' • ');
+  const url = streamUrl(file, hash);
 
-function makeStreamObject(f, idx, streamUrl) {
-  const info = [f.quality, f.sizeText, f.ext, f.durationText].filter(Boolean).join(' • ');
-  const audioLine = [f.audio.label, ...(f.audio.subs || [])].filter(Boolean).join(' • ');
-  const cleanTitle = `${idx === 0 ? '⭐ Odporúčané\n' : ''}${f.name}\n${info}\n${audioLine}`;
+  // Nuvio is stricter than Stremio. Keep stream object simple and explicit.
+  // No behaviorHints by default, because some clients hide streams with unknown hints.
+  const title = `${recommended ? 'Odporúčané - ' : ''}${file.name}`;
+  const description = [file.name, info, audioLine].filter(Boolean).join('
+');
 
-  const obj = {
-    name: `FastShare ${f.audio.lang && f.audio.lang !== 'any' ? f.audio.lang : ''}`.trim(),
-    title: cleanTitle,
-    description: `${f.name}\n${info}\n${audioLine}`,
-    url: streamUrl,
-    externalUrl: streamUrl
+  return {
+    name: `FastShare${file.audio.key !== 'any' ? ' ' + file.audio.key.replace('-', '/') : ''}`,
+    title,
+    description,
+    url,
+    externalUrl: url
   };
-
-  // Nuvio can be stricter than Stremio. Keep behaviorHints small and safe.
-  obj.behaviorHints = {
-    bingeGroup: `fastshare-${f.quality || 'auto'}-${f.audio.lang || 'any'}`
-  };
-
-  return obj;
 }
-
 async function buildStreamResponse(req, debug = false) {
   const creds = getCredentials(req);
   const auth = await login(creds);
@@ -496,33 +502,6 @@ function patchSeriesParams(req) {
   }
   return req;
 }
-
-
-// Nuvio fallback route: same streams, but strips behaviorHints and keeps description/externalUrl.
-async function nuvioStreamResponse(req, res, debug = false) {
-  try {
-    const payload = await buildStreamResponse(req, debug);
-    if (payload && Array.isArray(payload.streams)) {
-      payload.streams = payload.streams.map(s => {
-        const x = { ...s };
-        delete x.behaviorHints;
-        if (!x.description) x.description = x.title || x.name || '';
-        if (!x.externalUrl && x.url) x.externalUrl = x.url;
-        return x;
-      });
-    }
-    res.json(payload);
-  } catch (e) {
-    res.json(debug ? { ok:false, version: VERSION, error: String(e.stack || e) } : { streams: [] });
-  }
-}
-
-app.get('/nuvio/stream/:type/:id.json', async (req, res) => nuvioStreamResponse(req, res, false));
-app.get('/:config/nuvio/stream/:type/:id.json', async (req, res) => nuvioStreamResponse(req, res, false));
-app.get('/nuvio/stream/:type/:imdb/:season/:episode.json', async (req, res) => { patchSeriesParams(req); return nuvioStreamResponse(req, res, false); });
-app.get('/:config/nuvio/stream/:type/:imdb/:season/:episode.json', async (req, res) => { patchSeriesParams(req); return nuvioStreamResponse(req, res, false); });
-app.get('/nuvio/debug/stream/:type/:id.json', async (req, res) => nuvioStreamResponse(req, res, true));
-app.get('/:config/nuvio/debug/stream/:type/:id.json', async (req, res) => nuvioStreamResponse(req, res, true));
 
 // Nuvio-compatible series routes:
 // /stream/series/tt1234567/1/2.json
