@@ -10,7 +10,7 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
 const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
-const VERSION = '6.1.5';
+const VERSION = '6.1.6';
 const API = 'https://fastshare.cz/api/api_kodi.php';
 const MAX_STREAMS = Number(process.env.MAX_STREAMS || 60);
 
@@ -386,8 +386,7 @@ function streamObj(file, hash, recommended) {
   // Nuvio is stricter than Stremio. Keep stream object simple and explicit.
   // No behaviorHints by default, because some clients hide streams with unknown hints.
   const title = `${recommended ? 'Odporúčané - ' : ''}${file.name}`;
-  const description = [file.name, info, audioLine].filter(Boolean).join('
-');
+  const description = [file.name, info, audioLine].filter(Boolean).join('\\n');
 
   return {
     name: `FastShare${file.audio.key !== 'any' ? ' ' + file.audio.key.replace('-', '/') : ''}`,
