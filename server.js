@@ -10,7 +10,7 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
 const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
-const VERSION = '6.1.0';
+const VERSION = '6.1.1';
 const API = 'https://fastshare.cz/api/api_kodi.php';
 const MAX_STREAMS = Number(process.env.MAX_STREAMS || 60);
 
@@ -60,8 +60,10 @@ function detectAudio(name) {
   const n = normalize(name);
   const raw = String(name || '').toLowerCase();
 
-  const czSubs = /\b(cz|cze|cs|ceske|cesky)\s*(tit|titulky|sub|subs|subtitle|forced|title)\b|cztit|czforced/.test(n);
-  const skSubs = /\b(sk|svk|slovak|slovensky)\s*(tit|titulky|sub|subs|subtitle|forced|title)\b|sktit/.test(n);
+  // Subtitles must be detected before generic CZ/SK tokens.
+  // Important: "CZ tit/subs/title/forced" is NOT CZ audio.
+  const czSubs = /\b(cz|cze|cs|ceske|cesky|czech)\s*(tit|titulky|sub|subs|subtitle|forced|title)\b|cztit|czforced/.test(n);
+  const skSubs = /\b(sk|svk|slovak|slovensky)\s*(tit|titulky|sub|subs|subtitle|forced|title)\b|sktit|skforced/.test(n);
 
   const czDubStrong = /czdab|\b(cz|cze|cs|ceske|cesky)\s*(dab|dub|dabing|dubbing|audio)\b|\b(czech)\s*(audio|dub|dubbing)\b/.test(n);
   const skDubStrong = /skdab|\b(sk|svk|slovak|slovensky)\s*(dab|dub|dabing|dubbing|audio)\b|\b(slovak)\s*(audio|dub|dubbing)\b/.test(n);
@@ -73,20 +75,23 @@ function detectAudio(name) {
   const explicitMulti = /multi\s*audio|dual\s*audio|dual/.test(n);
 
   let label = 'Audio neznáme', key = 'any', score = 0;
+
   if (czDubStrong && skDubStrong) { label = 'CZ/SK Dabing'; key = 'CZ-SK'; score = 105; }
   else if (czDubStrong) { label = 'CZ Dabing'; key = 'CZ'; score = 100; }
-  else if (hasCZ && hasEN) { label = 'CZ/EN Audio'; key = 'CZ-EN'; score = 85; }
-  else if (hasCZ) { label = 'CZ Audio'; key = 'CZ'; score = 65; }
   else if (skDubStrong) { label = 'SK Dabing'; key = 'SK'; score = 80; }
-  else if (hasSK && hasEN) { label = 'SK/EN Audio'; key = 'SK-EN'; score = 55; }
-  else if (hasSK) { label = 'SK Audio'; key = 'SK'; score = 45; }
+  else if (hasCZ && hasEN && !czSubs) { label = 'CZ/EN Audio'; key = 'CZ-EN'; score = 85; }
+  else if (hasSK && hasEN && !skSubs) { label = 'SK/EN Audio'; key = 'SK-EN'; score = 55; }
   else if (enStrong || hasEN) { label = 'EN Audio'; key = 'EN'; score = 40; }
   else if (explicitMulti) { label = 'Multi Audio'; key = 'multi'; score = 30; }
+  else if (czSubs) { label = 'CZ titulky'; key = 'sub'; score = 5; }
+  else if (skSubs) { label = 'SK titulky'; key = 'sub'; score = 5; }
+  else if (hasCZ) { label = 'CZ neoverené'; key = 'CZ'; score = 20; }
+  else if (hasSK) { label = 'SK neoverené'; key = 'SK'; score = 15; }
 
   const subs = [];
-  if (czSubs) subs.push('CZ titulky');
-  if (skSubs) subs.push('SK titulky');
-  const subScore = (czSubs ? 15 : 0) + (skSubs ? 10 : 0);
+  if (czSubs && label !== 'CZ titulky') subs.push('CZ titulky');
+  if (skSubs && label !== 'SK titulky') subs.push('SK titulky');
+  const subScore = (czSubs && label !== 'CZ titulky' ? 15 : 0) + (skSubs && label !== 'SK titulky' ? 10 : 0);
   return { label, key, score, subs, subScore };
 }
 function hasEpisodePattern(name) {
@@ -117,14 +122,28 @@ function titleMatchScore(fileName, meta, type) {
 
   const tokens = title.split(' ').filter(x => x.length > 1);
   const hit = tokens.filter(tok => file.includes(tok)).length;
+  const strongTitle = Boolean(tokens.length && (hit === tokens.length || hit >= 2 || (hit / tokens.length) >= 0.67));
+
   if (tokens.length && hit === tokens.length) { score += 100; reasons.push('exact-title +100'); }
-  else if (hit > 0) { const pts = Math.min(40, hit * 12); score += pts; reasons.push(`title-tokens +${pts}`); }
+  else if (hit > 0) { const pts = Math.min(50, hit * 15); score += pts; reasons.push(`title-tokens +${pts}`); }
   else { score -= 80; reasons.push('title-miss -80'); }
 
   const years = getYears(fileName);
   if (year) {
-    if (years.includes(year)) { score += 50; reasons.push('year +50'); }
-    else if (years.length) { return { reject: true, score: -999, reasons: ['different-year reject'] }; }
+    if (years.includes(year)) {
+      score += 50; reasons.push('year +50');
+    } else if (years.length) {
+      const fileYear = Number(years[0]);
+      const metaYear = Number(year);
+      const diff = Math.abs(fileYear - metaYear);
+
+      // General release-year fix: if the title is a strong match, do not reject only
+      // because Cinemeta/TMDB uses a different release year than the filename.
+      if (strongTitle && diff === 1) { score -= 20; reasons.push('year off by 1 strong-title -20'); }
+      else if (strongTitle && diff <= 2) { score -= 45; reasons.push('year off by 2 strong-title -45'); }
+      else if (strongTitle) { score -= 90; reasons.push('different-year strong-title -90'); }
+      else { return { reject: true, score: -999, reasons: ['different-year weak-title reject'] }; }
+    }
   }
   return { reject: false, score, reasons };
 }
@@ -243,7 +262,16 @@ function termsFor(meta) {
     const s = String(meta.season).padStart(2, '0'), e = String(meta.episode).padStart(2, '0');
     return [`${title} S${s}E${e}`, `${title} ${meta.season}x${e}`, `${title}`];
   }
-  const arr = [title]; if (meta.year) arr.push(`${title} ${meta.year}`);
+
+  const arr = [];
+  if (title) arr.push(title);
+  if (title && meta.year) arr.push(`${title} ${meta.year}`);
+
+  // General fallback for titles where FastShare stores a translated title or a different release year.
+  const tokens = normalize(title).split(' ').filter(x => x.length > 2 && !['the','and','for','with','from'].includes(x));
+  if (tokens.length >= 2) arr.push(tokens.join(' '));
+  if (tokens.length >= 1) arr.push(tokens[tokens.length - 1]);
+
   return [...new Set(arr.filter(Boolean))];
 }
 function mapFile(raw) {
