@@ -10,7 +10,7 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
 const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
-const VERSION = '6.1.1';
+const VERSION = '6.1.2';
 const API = 'https://fastshare.cz/api/api_kodi.php';
 const MAX_STREAMS = Number(process.env.MAX_STREAMS || 60);
 
@@ -97,6 +97,42 @@ function detectAudio(name) {
 function hasEpisodePattern(name) {
   return /\bS\d{1,2}E\d{1,2}\b/i.test(name) || /\b\d{1,2}x\d{1,2}\b/i.test(name);
 }
+function episodePatternScore(name, meta) {
+  if (meta.type !== 'series' || !meta.season || !meta.episode) return { score: 0, reason: null };
+  const raw = String(name || '');
+  const n = normalize(raw);
+  const s = Number(meta.season);
+  const e = Number(meta.episode);
+  const sp = String(s).padStart(2, '0');
+  const ep = String(e).padStart(2, '0');
+
+  const patterns = [
+    new RegExp('\\bs0?' + s + 'e0?' + e + '\\b', 'i'),
+    new RegExp('\\b0?' + s + 'x0?' + e + '\\b', 'i'),
+    new RegExp('\\bseries\\s*0?' + s + '\\s*episode\\s*0?' + e + '\\b', 'i'),
+    new RegExp('\\bseason\\s*0?' + s + '\\s*episode\\s*0?' + e + '\\b', 'i')
+  ];
+  if (patterns.some(rx => rx.test(raw) || rx.test(n))) return { score: 180, reason: 'episode-pattern +180' };
+
+  // Weaker Czech/Slovak style fallback: title ... 01 02 / ep 02
+  if (new RegExp('\\b(ep|dil|cast|epizoda)\\s*0?' + e + '\\b', 'i').test(n)) {
+    return { score: 80, reason: 'episode-number +80' };
+  }
+  return { score: 0, reason: null };
+}
+function seriesEpisodeMismatch(name, meta) {
+  if (meta.type !== 'series' || !meta.season || !meta.episode) return false;
+  const raw = String(name || '');
+  const n = normalize(raw);
+  const s = Number(meta.season);
+  const e = Number(meta.episode);
+
+  const se = raw.match(/\bS(\d{1,2})E(\d{1,2})\b/i) || raw.match(/\b(\d{1,2})x(\d{1,2})\b/i);
+  if (!se) return false;
+  const fs = Number(se[1]);
+  const fe = Number(se[2]);
+  return fs !== s || fe !== e;
+}
 function getYears(name) {
   return [...String(name || '').matchAll(/\b(19\d{2}|20\d{2})\b/g)].map(m => m[1]);
 }
@@ -115,6 +151,9 @@ function titleMatchScore(fileName, meta, type) {
 
   if (type === 'movie' && hasEpisodePattern(fileName)) {
     return { reject: true, score: -999, reasons: ['movie-episode-pattern reject'] };
+  }
+  if (type === 'series' && seriesEpisodeMismatch(fileName, meta)) {
+    return { reject: true, score: -999, reasons: ['series-episode-mismatch reject'] };
   }
   if (sequelMismatch(fileName, meta.title, year)) {
     return { reject: true, score: -999, reasons: ['sequel-mismatch reject'] };
@@ -145,6 +184,16 @@ function titleMatchScore(fileName, meta, type) {
       else { return { reject: true, score: -999, reasons: ['different-year weak-title reject'] }; }
     }
   }
+  const eps = episodePatternScore(fileName, meta);
+  if (eps.score) { score += eps.score; reasons.push(eps.reason); }
+
+  // For series, an exact episode pattern is often more reliable than title words,
+  // because FastShare may use translated series names.
+  if (type === 'series' && eps.score && reasons.includes('title-miss -80')) {
+    score += 60;
+    reasons.push('series-title-relaxed +60');
+  }
+
   return { reject: false, score, reasons };
 }
 function runtimeScore(file, meta) {
@@ -258,12 +307,34 @@ async function getMeta(type, id) {
 }
 function termsFor(meta) {
   const title = meta.title || '';
+  const arr = [];
+
   if (meta.type === 'series' && meta.season && meta.episode) {
-    const s = String(meta.season).padStart(2, '0'), e = String(meta.episode).padStart(2, '0');
-    return [`${title} S${s}E${e}`, `${title} ${meta.season}x${e}`, `${title}`];
+    const s = Number(meta.season);
+    const e = Number(meta.episode);
+    const sp = String(s).padStart(2, '0');
+    const ep = String(e).padStart(2, '0');
+
+    const titles = [title];
+    const normalizedTitle = normalize(title);
+    const tokens = normalizedTitle.split(' ').filter(x => x.length > 2 && !['the','and','for','with','from'].includes(x));
+    if (tokens.length >= 2) titles.push(tokens.join(' '));
+    if (tokens.length >= 1) titles.push(tokens[tokens.length - 1]);
+
+    for (const t of [...new Set(titles.filter(Boolean))]) {
+      arr.push(`${t} S${sp}E${ep}`);
+      arr.push(`${t} S${s}E${e}`);
+      arr.push(`${t} ${s}x${ep}`);
+      arr.push(`${t} ${s}x${e}`);
+      arr.push(`${t} season ${s} episode ${e}`);
+      arr.push(`${t} ep ${e}`);
+      arr.push(`${t}`);
+    }
+
+    // Last-resort query by imdb/title only is intentionally kept last.
+    return [...new Set(arr.filter(Boolean))];
   }
 
-  const arr = [];
   if (title) arr.push(title);
   if (title && meta.year) arr.push(`${title} ${meta.year}`);
 
@@ -312,7 +383,7 @@ async function buildStreamResponse(req, debug = false) {
     searches.push({ term: r.term, status: r.status, resultCount: r.resultCount, apiUrl: r.apiUrl, firstFiles: r.files.slice(0,3) });
     all.push(...r.files);
   }
-  const scored = all.map(f => scoreFile(f, meta, type)).filter(Boolean).filter(f => f.score > 50);
+  const scored = all.map(f => scoreFile(f, meta, type)).filter(Boolean).filter(f => f.score > (type === 'series' ? 20 : 50));
   const sorted = dedupe(scored).sort((a,b) => b.score - a.score).slice(0, MAX_STREAMS);
   const streams = sorted.map((f, i) => streamObj(f, auth.hash, i === 0));
   if (!debug) return { streams };
