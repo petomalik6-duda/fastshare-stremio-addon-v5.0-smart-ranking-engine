@@ -10,7 +10,7 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
 const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
-const VERSION = '6.2.0';
+const VERSION = '6.2.1';
 const API = 'https://fastshare.cz/api/api_kodi.php';
 const MAX_STREAMS = Number(process.env.MAX_STREAMS || 60);
 
@@ -88,8 +88,6 @@ function detectAudio(name) {
   else if (czEnCombo || (hasCZ && hasEN)) { label = 'CZ/EN Audio'; key = 'CZ-EN'; score = 85; }
   else if (skEnCombo || (hasSK && hasEN)) { label = 'SK/EN Audio'; key = 'SK-EN'; score = 60; }
   else if (enStrong || hasEN) { label = 'EN Audio'; key = 'EN'; score = 40; }
-  else if (hasCZ) { label = 'CZ pravdepodobne'; key = 'CZ-prob'; score = 35; }
-  else if (hasSK) { label = 'SK pravdepodobne'; key = 'SK-prob'; score = 25; }
   else if (explicitMulti) { label = 'Multi Audio'; key = 'multi'; score = 30; }
 
   const subs = [];
@@ -127,7 +125,7 @@ function titleMatchScore(fileName, meta, type) {
   const tokens = title.split(' ').filter(x => x.length > 1);
   const hit = tokens.filter(tok => file.includes(tok)).length;
   if (tokens.length && hit === tokens.length) { score += 100; reasons.push('exact-title +100'); }
-  else if (hit > 0) { const pts = Math.min(40, hit * 12); score += pts; reasons.push(`title-tokens +${pts}`); }
+  else if (hit > 0) { const pts = Math.min(55, hit * 18); score += pts; reasons.push(`relaxed-title-tokens +${pts}`); }
   else { score -= 80; reasons.push('title-miss -80'); }
 
   const years = getYears(fileName);
@@ -252,7 +250,11 @@ function termsFor(meta) {
     const s = String(meta.season).padStart(2, '0'), e = String(meta.episode).padStart(2, '0');
     return [`${title} S${s}E${e}`, `${title} ${meta.season}x${e}`, `${title}`];
   }
-  const arr = [title]; if (meta.year) arr.push(`${title} ${meta.year}`);
+  const tokenTerm = title.split(/\s+/).filter(w => !/^(the|a|an|in|on|of|and|or)$/i.test(w)).join(' ');
+  const arr = [];
+  if (title && meta.year) arr.push(`${title} ${meta.year}`);
+  if (title) arr.push(title);
+  if (tokenTerm && tokenTerm !== title) arr.push(tokenTerm);
   return [...new Set(arr.filter(Boolean))];
 }
 function mapFile(raw) {
@@ -293,7 +295,7 @@ async function buildStreamResponse(req, debug = false) {
     searches.push({ term: r.term, status: r.status, resultCount: r.resultCount, apiUrl: r.apiUrl, firstFiles: r.files.slice(0,3) });
     all.push(...r.files);
   }
-  const scored = all.map(f => scoreFile(f, meta, type)).filter(Boolean).filter(f => f.score > 50);
+  const scored = all.map(f => scoreFile(f, meta, type)).filter(Boolean).filter(f => f.score > 30);
   const sorted = dedupe(scored).sort((a,b) => b.score - a.score).slice(0, MAX_STREAMS);
   const streams = sorted.map((f, i) => streamObj(f, auth.hash, i === 0));
   if (!debug) return { streams };
