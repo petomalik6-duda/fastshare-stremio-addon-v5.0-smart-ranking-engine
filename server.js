@@ -10,7 +10,7 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
 const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
-const VERSION = '6.1.2';
+const VERSION = '6.1.3';
 const API = 'https://fastshare.cz/api/api_kodi.php';
 const MAX_STREAMS = Number(process.env.MAX_STREAMS || 60);
 
@@ -262,7 +262,7 @@ function manifest(configToken = null) {
     id: 'community.fastshare.kodiapi.configurator.v6',
     version: VERSION,
     name: 'FastShare Kodi API',
-    description: 'FastShare streams using FastShare Kodi API. Configure with your own lawful account.',
+    description: 'FastShare streams using FastShare Kodi API. Configure with your own lawful account. Includes Stremio/Nuvio series routes.',
     logo: 'https://www.stremio.com/website/stremio-logo-small.png',
     resources: [{ name: 'stream', types: ['movie','series'], idPrefixes: ['tt', ''] }],
     types: ['movie','series'],
@@ -464,9 +464,37 @@ app.get('/:config/debug/login', async (req, res) => res.json({ ok: true, version
 app.get('/debug/search', async (req, res) => { const auth = await login(getCredentials(req)); if (!auth.ok) return res.json({ ok: true, version: VERSION, auth, resultCount: 0, files: [] }); const r = await searchFastshare(req.query.term || 'avatar', auth.hash); res.json({ ok: true, version: VERSION, auth: { ok: true, hasHash: true }, ...r }); });
 app.get('/:config/debug/search', async (req, res) => { const auth = await login(getCredentials(req)); if (!auth.ok) return res.json({ ok: true, version: VERSION, auth, resultCount: 0, files: [] }); const r = await searchFastshare(req.query.term || 'avatar', auth.hash); res.json({ ok: true, version: VERSION, auth: { ok: true, hasHash: true }, ...r }); });
 
+
+function patchSeriesParams(req) {
+  // Nuvio can call series streams as /stream/series/tt1234567/1/2.json
+  // while Stremio usually calls /stream/series/tt1234567:1:2.json.
+  // This helper normalizes both into the Stremio-style id before buildStreamResponse().
+  if (req.params && req.params.type === 'series' && req.params.imdb && req.params.season && req.params.episode) {
+    req.params.id = `${req.params.imdb}:${req.params.season}:${String(req.params.episode).replace(/\.json$/i, '')}`;
+  }
+  return req;
+}
+
+// Nuvio-compatible series routes:
+// /stream/series/tt1234567/1/2.json
+// /<config>/stream/series/tt1234567/1/2.json
+app.get('/stream/:type/:imdb/:season/:episode.json', async (req, res) => { try { patchSeriesParams(req); res.json(await buildStreamResponse(req, false)); } catch (e) { res.json({ streams: [] }); } });
+app.get('/:config/stream/:type/:imdb/:season/:episode.json', async (req, res) => { try { patchSeriesParams(req); res.json(await buildStreamResponse(req, false)); } catch (e) { res.json({ streams: [] }); } });
+app.get('/debug/stream/:type/:imdb/:season/:episode.json', async (req, res) => { try { patchSeriesParams(req); res.json(await buildStreamResponse(req, true)); } catch (e) { res.status(500).json({ ok:false, version: VERSION, error: String(e.stack || e) }); } });
+app.get('/:config/debug/stream/:type/:imdb/:season/:episode.json', async (req, res) => { try { patchSeriesParams(req); res.json(await buildStreamResponse(req, true)); } catch (e) { res.status(500).json({ ok:false, version: VERSION, error: String(e.stack || e) }); } });
+
+// Original Stremio routes:
+// /stream/series/tt1234567:1:2.json
+// /<config>/stream/series/tt1234567:1:2.json
 app.get('/stream/:type/:id.json', async (req, res) => { try { res.json(await buildStreamResponse(req, false)); } catch (e) { res.json({ streams: [] }); } });
 app.get('/:config/stream/:type/:id.json', async (req, res) => { try { res.json(await buildStreamResponse(req, false)); } catch (e) { res.json({ streams: [] }); } });
 app.get('/debug/stream/:type/:id.json', async (req, res) => { try { res.json(await buildStreamResponse(req, true)); } catch (e) { res.status(500).json({ ok:false, version: VERSION, error: String(e.stack || e) }); } });
 app.get('/:config/debug/stream/:type/:id.json', async (req, res) => { try { res.json(await buildStreamResponse(req, true)); } catch (e) { res.status(500).json({ ok:false, version: VERSION, error: String(e.stack || e) }); } });
+
+// Extra plural aliases for clients that call /streams instead of /stream.
+app.get('/streams/:type/:id.json', async (req, res) => { try { res.json(await buildStreamResponse(req, false)); } catch (e) { res.json({ streams: [] }); } });
+app.get('/:config/streams/:type/:id.json', async (req, res) => { try { res.json(await buildStreamResponse(req, false)); } catch (e) { res.json({ streams: [] }); } });
+app.get('/streams/:type/:imdb/:season/:episode.json', async (req, res) => { try { patchSeriesParams(req); res.json(await buildStreamResponse(req, false)); } catch (e) { res.json({ streams: [] }); } });
+app.get('/:config/streams/:type/:imdb/:season/:episode.json', async (req, res) => { try { patchSeriesParams(req); res.json(await buildStreamResponse(req, false)); } catch (e) { res.json({ streams: [] }); } });
 
 app.listen(PORT, () => console.log(`FastShare Stremio addon v${VERSION} on ${PORT}`));
