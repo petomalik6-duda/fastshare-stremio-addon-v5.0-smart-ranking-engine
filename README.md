@@ -1,19 +1,45 @@
-FastShare Stremio Addon v6.2.2 Winter Sokcho Hotfix
+# FastShare Stremio Addon v6.0 Configurator
 
-Build Command:
+## Render env
+
+Required:
+
+```txt
+PORT=10000
+BASE_URL=https://your-render-service.onrender.com
+```
+
+Optional fallback account:
+
+```txt
+FASTSHARE_USERNAME=your_fastshare_login
+FASTSHARE_PASSWORD=your_fastshare_password
+```
+
+## Build command
+
+```txt
 npm install --omit=dev --no-audit --no-fund
+```
 
-Start Command:
+## Start command
+
+```txt
 npm start
+```
 
-Test:
-/health
-/configure
-/<config>/debug/search?term=winter%20in%20sokcho
-/<config>/debug/search?term=hiver%20a%20sokcho
-/<config>/debug/stream/movie/tt30519830.json
+## Install
 
-Fixes:
-- adds Winter in Sokcho / Hiver a Sokcho / Sokcho search aliases
-- CZ tit/subs/title is no longer shown as CZ Audio
-- keeps the stable v6.2 login/playback style
+Open:
+
+```txt
+https://your-render-service.onrender.com/configure
+```
+
+Enter FastShare login/password and install generated manifest URL.
+
+
+## v6.2
+- Strict audio detection: CZ/SK dabing only from explicit dab/audio markers.
+- Bare CZ/SK is shown as probable language, not confirmed dabing.
+- CZ/EN and SK/EN detection improved.
