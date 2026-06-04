@@ -10,7 +10,7 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
 const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
-const VERSION = '6.1.6';
+const VERSION = '6.1.7';
 const API = 'https://fastshare.cz/api/api_kodi.php';
 const MAX_STREAMS = Number(process.env.MAX_STREAMS || 60);
 
@@ -31,6 +31,16 @@ function normalize(s) {
 }
 function slug(s) { return normalize(s).replace(/\s+/g, '-'); }
 function esc(s) { return encodeURIComponent(String(s || '')); }
+function publicBase(req) {
+  return (process.env.BASE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
+}
+function encodePlayUrl(url) {
+  return Buffer.from(JSON.stringify({ url }), 'utf8').toString('base64url');
+}
+function decodePlayUrl(token) {
+  try { return JSON.parse(Buffer.from(String(token || ''), 'base64url').toString('utf8')).url || ''; }
+  catch { return ''; }
+}
 function bytesToHuman(bytes) {
   const n = Number(bytes || 0); if (!n) return '';
   const units = ['B','KB','MB','GB','TB']; let x = n, i = 0;
@@ -280,7 +290,7 @@ function manifest(configToken = null) {
     name: 'FastShare Kodi API',
     description: 'FastShare streams using FastShare Kodi API. Configure with your own lawful account. Includes Stremio/Nuvio series routes.',
     logo: 'https://www.stremio.com/website/stremio-logo-small.png',
-    resources: ['stream'],
+    resources: [{ name: 'stream', types: ['movie','series'], idPrefixes: ['tt'] }],
     types: ['movie','series'],
     catalogs: [],
     idPrefixes: ['tt'],
@@ -378,22 +388,25 @@ function streamUrl(file, hash) {
   const sep = base.includes('?') ? '&' : '?';
   return `${base}${sep}stream=1&session=${esc(hash)}&${esc(file.name)}`;
 }
-function streamObj(file, hash, recommended) {
+function streamObj(file, hash, recommended, req) {
   const info = [file.quality, file.sizeText, file.ext, file.durationText].filter(Boolean).join(' • ');
   const audioLine = [file.audio.label, ...(file.audio.subs || [])].filter(Boolean).join(' • ');
-  const url = streamUrl(file, hash);
+  const directUrl = streamUrl(file, hash);
 
-  // Nuvio is stricter than Stremio. Keep stream object simple and explicit.
-  // No behaviorHints by default, because some clients hide streams with unknown hints.
+  // Nuvio-safe: main url is local addon URL, which redirects to FastShare.
+  // Stremio also follows this fine, while Nuvio often dislikes direct data*.fastshare.cloud links.
+  const proxyUrl = `${publicBase(req)}/play/${encodePlayUrl(directUrl)}`;
+
   const title = `${recommended ? 'Odporúčané - ' : ''}${file.name}`;
-  const description = [file.name, info, audioLine].filter(Boolean).join('\\n');
+  const description = [file.name, info, audioLine].filter(Boolean).join('\n');
 
   return {
     name: `FastShare${file.audio.key !== 'any' ? ' ' + file.audio.key.replace('-', '/') : ''}`,
     title,
     description,
-    url,
-    externalUrl: url
+    url: proxyUrl,
+    externalUrl: directUrl,
+    directUrl
   };
 }
 async function buildStreamResponse(req, debug = false) {
@@ -412,7 +425,7 @@ async function buildStreamResponse(req, debug = false) {
   }
   const scored = all.map(f => scoreFile(f, meta, type)).filter(Boolean).filter(f => f.score > (type === 'series' ? 20 : 50));
   const sorted = dedupe(scored).sort((a,b) => b.score - a.score).slice(0, MAX_STREAMS);
-  const streams = sorted.map((f, i) => streamObj(f, auth.hash, i === 0));
+  const streams = sorted.map((f, i) => streamObj(f, auth.hash, i === 0, req));
   if (!debug) return { streams };
   return { ok: true, version: VERSION, request: { type, id }, meta, terms, auth: { ok: true, source: auth.source, hasHash: true }, search: searches, streamCount: streams.length, files: sorted, streams };
 }
@@ -491,6 +504,15 @@ app.get('/:config/debug/login', async (req, res) => res.json({ ok: true, version
 app.get('/debug/search', async (req, res) => { const auth = await login(getCredentials(req)); if (!auth.ok) return res.json({ ok: true, version: VERSION, auth, resultCount: 0, files: [] }); const r = await searchFastshare(req.query.term || 'avatar', auth.hash); res.json({ ok: true, version: VERSION, auth: { ok: true, hasHash: true }, ...r }); });
 app.get('/:config/debug/search', async (req, res) => { const auth = await login(getCredentials(req)); if (!auth.ok) return res.json({ ok: true, version: VERSION, auth, resultCount: 0, files: [] }); const r = await searchFastshare(req.query.term || 'avatar', auth.hash); res.json({ ok: true, version: VERSION, auth: { ok: true, hasHash: true }, ...r }); });
 
+
+
+// Local playback proxy for Nuvio compatibility.
+// It does not download the file through Render; it only redirects to the FastShare streaming URL.
+app.get('/play/:token', (req, res) => {
+  const url = decodePlayUrl(req.params.token);
+  if (!url || !/^https?:\/\//i.test(url)) return res.status(400).send('Bad play URL');
+  res.redirect(302, url);
+});
 
 function patchSeriesParams(req) {
   // Nuvio can call series streams as /stream/series/tt1234567/1/2.json
