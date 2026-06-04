@@ -1,17 +1,18 @@
-FastShare Stremio Addon v6.3.1 Safe
+FastShare Stremio Addon v6.2.1 Stable Hotfix
 
-Render settings:
-Build Command:
-npm install --omit=dev --no-audit --no-fund
+Based on working v6.2.
+Fixes:
+- CZ tit/subs/title no longer becomes CZ Audio/CZ pravdepodobne
+- SK tit/subs/title no longer becomes SK Audio/SK pravdepodobne
+- adds relaxed search term fallback for rare titles such as Winter in Sokcho
+- lowers stream score threshold slightly without changing playback/login
 
-Start Command:
-npm start
+Render:
+Build Command: npm install --omit=dev --no-audit --no-fund
+Start Command: npm start
 
-After deploy:
-1. Open /health
-2. Open /manifest.json
-3. Open /configure
-4. Generate configured manifest URL
-5. Test /<config>/debug/login
-6. Test /<config>/debug/search?term=winter%20in%20sokcho
-7. Test /<config>/debug/stream/movie/<imdbid>.json
+Test:
+/health
+/configure
+/<config>/debug/search?term=winter%20sokcho
+/<config>/debug/stream/movie/<imdbid>.json

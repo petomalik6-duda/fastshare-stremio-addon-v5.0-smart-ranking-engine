@@ -1,7 +1,7 @@
 {
-  "name": "fastshare-stremio-addon-v631-safe",
-  "version": "6.3.1",
-  "description": "FastShare Stremio addon safe build with relaxed matching and strict subtitles/audio detection.",
+  "name": "fastshare-stremio-addon-v6-2-1-stable-hotfix",
+  "version": "6.2.1",
+  "description": "FastShare Stremio addon with configurator using FastShare Kodi API.",
   "main": "server.js",
   "scripts": { "start": "node server.js" },
   "dependencies": {
