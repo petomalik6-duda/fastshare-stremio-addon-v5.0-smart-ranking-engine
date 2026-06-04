@@ -10,7 +10,7 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
 const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
-const VERSION = '6.1.3';
+const VERSION = '6.1.4';
 const API = 'https://fastshare.cz/api/api_kodi.php';
 const MAX_STREAMS = Number(process.env.MAX_STREAMS || 60);
 
@@ -369,6 +369,28 @@ function streamObj(file, hash, recommended) {
   const title = `${recommended ? '⭐ Odporúčané\n' : ''}${file.name}\n${bits}\n${lang}`;
   return { name: `FastShare${file.audio.key !== 'any' ? ' ' + file.audio.key.replace('-', '/') : ''}`, title, url: streamUrl(file, hash), behaviorHints: { bingeGroup: `fastshare-${file.quality || 'auto'}-${file.audio.key}` } };
 }
+
+function makeStreamObject(f, idx, streamUrl) {
+  const info = [f.quality, f.sizeText, f.ext, f.durationText].filter(Boolean).join(' • ');
+  const audioLine = [f.audio.label, ...(f.audio.subs || [])].filter(Boolean).join(' • ');
+  const cleanTitle = `${idx === 0 ? '⭐ Odporúčané\n' : ''}${f.name}\n${info}\n${audioLine}`;
+
+  const obj = {
+    name: `FastShare ${f.audio.lang && f.audio.lang !== 'any' ? f.audio.lang : ''}`.trim(),
+    title: cleanTitle,
+    description: `${f.name}\n${info}\n${audioLine}`,
+    url: streamUrl,
+    externalUrl: streamUrl
+  };
+
+  // Nuvio can be stricter than Stremio. Keep behaviorHints small and safe.
+  obj.behaviorHints = {
+    bingeGroup: `fastshare-${f.quality || 'auto'}-${f.audio.lang || 'any'}`
+  };
+
+  return obj;
+}
+
 async function buildStreamResponse(req, debug = false) {
   const creds = getCredentials(req);
   const auth = await login(creds);
@@ -474,6 +496,33 @@ function patchSeriesParams(req) {
   }
   return req;
 }
+
+
+// Nuvio fallback route: same streams, but strips behaviorHints and keeps description/externalUrl.
+async function nuvioStreamResponse(req, res, debug = false) {
+  try {
+    const payload = await buildStreamResponse(req, debug);
+    if (payload && Array.isArray(payload.streams)) {
+      payload.streams = payload.streams.map(s => {
+        const x = { ...s };
+        delete x.behaviorHints;
+        if (!x.description) x.description = x.title || x.name || '';
+        if (!x.externalUrl && x.url) x.externalUrl = x.url;
+        return x;
+      });
+    }
+    res.json(payload);
+  } catch (e) {
+    res.json(debug ? { ok:false, version: VERSION, error: String(e.stack || e) } : { streams: [] });
+  }
+}
+
+app.get('/nuvio/stream/:type/:id.json', async (req, res) => nuvioStreamResponse(req, res, false));
+app.get('/:config/nuvio/stream/:type/:id.json', async (req, res) => nuvioStreamResponse(req, res, false));
+app.get('/nuvio/stream/:type/:imdb/:season/:episode.json', async (req, res) => { patchSeriesParams(req); return nuvioStreamResponse(req, res, false); });
+app.get('/:config/nuvio/stream/:type/:imdb/:season/:episode.json', async (req, res) => { patchSeriesParams(req); return nuvioStreamResponse(req, res, false); });
+app.get('/nuvio/debug/stream/:type/:id.json', async (req, res) => nuvioStreamResponse(req, res, true));
+app.get('/:config/nuvio/debug/stream/:type/:id.json', async (req, res) => nuvioStreamResponse(req, res, true));
 
 // Nuvio-compatible series routes:
 // /stream/series/tt1234567/1/2.json
