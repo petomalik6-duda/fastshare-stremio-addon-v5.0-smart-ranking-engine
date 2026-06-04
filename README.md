@@ -1,9 +1,17 @@
-FastShare v6.3 Relaxed Matching + Subtitles Fix
+FastShare Stremio Addon v6.3.1 Safe
 
-Build command:
+Render settings:
+Build Command:
 npm install --omit=dev --no-audit --no-fund
 
-Start command:
+Start Command:
 npm start
 
-Open /configure and install generated manifest URL.
+After deploy:
+1. Open /health
+2. Open /manifest.json
+3. Open /configure
+4. Generate configured manifest URL
+5. Test /<config>/debug/login
+6. Test /<config>/debug/search?term=winter%20in%20sokcho
+7. Test /<config>/debug/stream/movie/<imdbid>.json
