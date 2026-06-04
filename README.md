@@ -1,18 +1,21 @@
-FastShare Stremio Addon v6.2.1 Stable Hotfix
+FastShare Stremio Addon v6.2.3 Full
 
-Based on working v6.2.
-Fixes:
-- CZ tit/subs/title no longer becomes CZ Audio/CZ pravdepodobne
-- SK tit/subs/title no longer becomes SK Audio/SK pravdepodobne
-- adds relaxed search term fallback for rare titles such as Winter in Sokcho
-- lowers stream score threshold slightly without changing playback/login
+Build Command:
+npm install --omit=dev --no-audit --no-fund
 
-Render:
-Build Command: npm install --omit=dev --no-audit --no-fund
-Start Command: npm start
+Start Command:
+npm start
 
 Test:
 /health
 /configure
-/<config>/debug/search?term=winter%20sokcho
-/<config>/debug/stream/movie/<imdbid>.json
+/<config>/debug/login
+/<config>/debug/search?term=winter%20in%20sokcho
+/<config>/debug/search?term=sokcho
+/<config>/debug/stream/movie/tt30519830.json
+
+Fixes:
+- relaxed fallback if strict scoring returns no streams
+- Winter in Sokcho / Hiver a Sokcho / Sokcho aliases
+- CZ tit/subs/title is not treated as CZ Audio
+- production /<config>/stream routes for Stremio
