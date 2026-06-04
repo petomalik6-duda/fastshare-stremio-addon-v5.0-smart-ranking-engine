@@ -1,18 +1,39 @@
-FastShare Stremio Addon v6.2.1 Stable Hotfix
+# FastShare Stremio Addon v6.0 Configurator
 
-Based on working v6.2.
-Fixes:
-- CZ tit/subs/title no longer becomes CZ Audio/CZ pravdepodobne
-- SK tit/subs/title no longer becomes SK Audio/SK pravdepodobne
-- adds relaxed search term fallback for rare titles such as Winter in Sokcho
-- lowers stream score threshold slightly without changing playback/login
+## Render env
 
-Render:
-Build Command: npm install --omit=dev --no-audit --no-fund
-Start Command: npm start
+Required:
 
-Test:
-/health
-/configure
-/<config>/debug/search?term=winter%20sokcho
-/<config>/debug/stream/movie/<imdbid>.json
+```txt
+PORT=10000
+BASE_URL=https://your-render-service.onrender.com
+```
+
+Optional fallback account:
+
+```txt
+FASTSHARE_USERNAME=your_fastshare_login
+FASTSHARE_PASSWORD=your_fastshare_password
+```
+
+## Build command
+
+```txt
+npm install --omit=dev --no-audit --no-fund
+```
+
+## Start command
+
+```txt
+npm start
+```
+
+## Install
+
+Open:
+
+```txt
+https://your-render-service.onrender.com/configure
+```
+
+Enter FastShare login/password and install generated manifest URL.
