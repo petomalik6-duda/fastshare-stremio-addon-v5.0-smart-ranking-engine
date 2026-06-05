@@ -10,7 +10,7 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
 const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
-const VERSION = '6.1.7';
+const VERSION = '6.1.2';
 const API = 'https://fastshare.cz/api/api_kodi.php';
 const MAX_STREAMS = Number(process.env.MAX_STREAMS || 60);
 
@@ -31,16 +31,6 @@ function normalize(s) {
 }
 function slug(s) { return normalize(s).replace(/\s+/g, '-'); }
 function esc(s) { return encodeURIComponent(String(s || '')); }
-function publicBase(req) {
-  return (process.env.BASE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
-}
-function encodePlayUrl(url) {
-  return Buffer.from(JSON.stringify({ url }), 'utf8').toString('base64url');
-}
-function decodePlayUrl(token) {
-  try { return JSON.parse(Buffer.from(String(token || ''), 'base64url').toString('utf8')).url || ''; }
-  catch { return ''; }
-}
 function bytesToHuman(bytes) {
   const n = Number(bytes || 0); if (!n) return '';
   const units = ['B','KB','MB','GB','TB']; let x = n, i = 0;
@@ -130,19 +120,6 @@ function episodePatternScore(name, meta) {
   }
   return { score: 0, reason: null };
 }
-
-function unrelatedSeriesSpinOff(name, meta) {
-  if (meta.type !== 'series' || !meta.title) return false;
-  const n = normalize(name);
-  const title = normalize(meta.title);
-  // Example: searching Game of Thrones S01E01 can return House of the Dragon / Rod draka.
-  // If the file explicitly contains a different known show title before the target title in parentheses, reject it.
-  if (title.includes('game of thrones')) {
-    if (n.includes('house of the dragon') || n.includes('rod draka')) return true;
-  }
-  return false;
-}
-
 function seriesEpisodeMismatch(name, meta) {
   if (meta.type !== 'series' || !meta.season || !meta.episode) return false;
   const raw = String(name || '');
@@ -174,9 +151,6 @@ function titleMatchScore(fileName, meta, type) {
 
   if (type === 'movie' && hasEpisodePattern(fileName)) {
     return { reject: true, score: -999, reasons: ['movie-episode-pattern reject'] };
-  }
-  if (type === 'series' && unrelatedSeriesSpinOff(fileName, meta)) {
-    return { reject: true, score: -999, reasons: ['unrelated-series-spinoff reject'] };
   }
   if (type === 'series' && seriesEpisodeMismatch(fileName, meta)) {
     return { reject: true, score: -999, reasons: ['series-episode-mismatch reject'] };
@@ -288,9 +262,9 @@ function manifest(configToken = null) {
     id: 'community.fastshare.kodiapi.configurator.v6',
     version: VERSION,
     name: 'FastShare Kodi API',
-    description: 'FastShare streams using FastShare Kodi API. Configure with your own lawful account. Includes Stremio/Nuvio series routes.',
+    description: 'FastShare streams using FastShare Kodi API. Configure with your own lawful account.',
     logo: 'https://www.stremio.com/website/stremio-logo-small.png',
-    resources: [{ name: 'stream', types: ['movie','series'], idPrefixes: ['tt'] }],
+    resources: [{ name: 'stream', types: ['movie','series'], idPrefixes: ['tt', ''] }],
     types: ['movie','series'],
     catalogs: [],
     idPrefixes: ['tt'],
@@ -388,26 +362,12 @@ function streamUrl(file, hash) {
   const sep = base.includes('?') ? '&' : '?';
   return `${base}${sep}stream=1&session=${esc(hash)}&${esc(file.name)}`;
 }
-function streamObj(file, hash, recommended, req) {
-  const info = [file.quality, file.sizeText, file.ext, file.durationText].filter(Boolean).join(' • ');
-  const audioLine = [file.audio.label, ...(file.audio.subs || [])].filter(Boolean).join(' • ');
-  const directUrl = streamUrl(file, hash);
-
-  // Nuvio-safe: main url is local addon URL, which redirects to FastShare.
-  // Stremio also follows this fine, while Nuvio often dislikes direct data*.fastshare.cloud links.
-  const proxyUrl = `${publicBase(req)}/play/${encodePlayUrl(directUrl)}`;
-
-  const title = `${recommended ? 'Odporúčané - ' : ''}${file.name}`;
-  const description = [file.name, info, audioLine].filter(Boolean).join('\n');
-
-  return {
-    name: `FastShare${file.audio.key !== 'any' ? ' ' + file.audio.key.replace('-', '/') : ''}`,
-    title,
-    description,
-    url: proxyUrl,
-    externalUrl: directUrl,
-    directUrl
-  };
+function streamObj(file, hash, recommended) {
+  const size = bytesToHuman(file.size);
+  const bits = [file.quality, size, file.ext, file.durationText].filter(Boolean).join(' • ');
+  const lang = [file.audio.label, ...(file.audio.subs || [])].filter(Boolean).join(' • ');
+  const title = `${recommended ? '⭐ Odporúčané\n' : ''}${file.name}\n${bits}\n${lang}`;
+  return { name: `FastShare${file.audio.key !== 'any' ? ' ' + file.audio.key.replace('-', '/') : ''}`, title, url: streamUrl(file, hash), behaviorHints: { bingeGroup: `fastshare-${file.quality || 'auto'}-${file.audio.key}` } };
 }
 async function buildStreamResponse(req, debug = false) {
   const creds = getCredentials(req);
@@ -425,7 +385,7 @@ async function buildStreamResponse(req, debug = false) {
   }
   const scored = all.map(f => scoreFile(f, meta, type)).filter(Boolean).filter(f => f.score > (type === 'series' ? 20 : 50));
   const sorted = dedupe(scored).sort((a,b) => b.score - a.score).slice(0, MAX_STREAMS);
-  const streams = sorted.map((f, i) => streamObj(f, auth.hash, i === 0, req));
+  const streams = sorted.map((f, i) => streamObj(f, auth.hash, i === 0));
   if (!debug) return { streams };
   return { ok: true, version: VERSION, request: { type, id }, meta, terms, auth: { ok: true, source: auth.source, hasHash: true }, search: searches, streamCount: streams.length, files: sorted, streams };
 }
@@ -504,46 +464,9 @@ app.get('/:config/debug/login', async (req, res) => res.json({ ok: true, version
 app.get('/debug/search', async (req, res) => { const auth = await login(getCredentials(req)); if (!auth.ok) return res.json({ ok: true, version: VERSION, auth, resultCount: 0, files: [] }); const r = await searchFastshare(req.query.term || 'avatar', auth.hash); res.json({ ok: true, version: VERSION, auth: { ok: true, hasHash: true }, ...r }); });
 app.get('/:config/debug/search', async (req, res) => { const auth = await login(getCredentials(req)); if (!auth.ok) return res.json({ ok: true, version: VERSION, auth, resultCount: 0, files: [] }); const r = await searchFastshare(req.query.term || 'avatar', auth.hash); res.json({ ok: true, version: VERSION, auth: { ok: true, hasHash: true }, ...r }); });
 
-
-
-// Local playback proxy for Nuvio compatibility.
-// It does not download the file through Render; it only redirects to the FastShare streaming URL.
-app.get('/play/:token', (req, res) => {
-  const url = decodePlayUrl(req.params.token);
-  if (!url || !/^https?:\/\//i.test(url)) return res.status(400).send('Bad play URL');
-  res.redirect(302, url);
-});
-
-function patchSeriesParams(req) {
-  // Nuvio can call series streams as /stream/series/tt1234567/1/2.json
-  // while Stremio usually calls /stream/series/tt1234567:1:2.json.
-  // This helper normalizes both into the Stremio-style id before buildStreamResponse().
-  if (req.params && req.params.type === 'series' && req.params.imdb && req.params.season && req.params.episode) {
-    req.params.id = `${req.params.imdb}:${req.params.season}:${String(req.params.episode).replace(/\.json$/i, '')}`;
-  }
-  return req;
-}
-
-// Nuvio-compatible series routes:
-// /stream/series/tt1234567/1/2.json
-// /<config>/stream/series/tt1234567/1/2.json
-app.get('/stream/:type/:imdb/:season/:episode.json', async (req, res) => { try { patchSeriesParams(req); res.json(await buildStreamResponse(req, false)); } catch (e) { res.json({ streams: [] }); } });
-app.get('/:config/stream/:type/:imdb/:season/:episode.json', async (req, res) => { try { patchSeriesParams(req); res.json(await buildStreamResponse(req, false)); } catch (e) { res.json({ streams: [] }); } });
-app.get('/debug/stream/:type/:imdb/:season/:episode.json', async (req, res) => { try { patchSeriesParams(req); res.json(await buildStreamResponse(req, true)); } catch (e) { res.status(500).json({ ok:false, version: VERSION, error: String(e.stack || e) }); } });
-app.get('/:config/debug/stream/:type/:imdb/:season/:episode.json', async (req, res) => { try { patchSeriesParams(req); res.json(await buildStreamResponse(req, true)); } catch (e) { res.status(500).json({ ok:false, version: VERSION, error: String(e.stack || e) }); } });
-
-// Original Stremio routes:
-// /stream/series/tt1234567:1:2.json
-// /<config>/stream/series/tt1234567:1:2.json
 app.get('/stream/:type/:id.json', async (req, res) => { try { res.json(await buildStreamResponse(req, false)); } catch (e) { res.json({ streams: [] }); } });
 app.get('/:config/stream/:type/:id.json', async (req, res) => { try { res.json(await buildStreamResponse(req, false)); } catch (e) { res.json({ streams: [] }); } });
 app.get('/debug/stream/:type/:id.json', async (req, res) => { try { res.json(await buildStreamResponse(req, true)); } catch (e) { res.status(500).json({ ok:false, version: VERSION, error: String(e.stack || e) }); } });
 app.get('/:config/debug/stream/:type/:id.json', async (req, res) => { try { res.json(await buildStreamResponse(req, true)); } catch (e) { res.status(500).json({ ok:false, version: VERSION, error: String(e.stack || e) }); } });
-
-// Extra plural aliases for clients that call /streams instead of /stream.
-app.get('/streams/:type/:id.json', async (req, res) => { try { res.json(await buildStreamResponse(req, false)); } catch (e) { res.json({ streams: [] }); } });
-app.get('/:config/streams/:type/:id.json', async (req, res) => { try { res.json(await buildStreamResponse(req, false)); } catch (e) { res.json({ streams: [] }); } });
-app.get('/streams/:type/:imdb/:season/:episode.json', async (req, res) => { try { patchSeriesParams(req); res.json(await buildStreamResponse(req, false)); } catch (e) { res.json({ streams: [] }); } });
-app.get('/:config/streams/:type/:imdb/:season/:episode.json', async (req, res) => { try { patchSeriesParams(req); res.json(await buildStreamResponse(req, false)); } catch (e) { res.json({ streams: [] }); } });
 
 app.listen(PORT, () => console.log(`FastShare Stremio addon v${VERSION} on ${PORT}`));
