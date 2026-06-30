@@ -10,7 +10,7 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
 const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
-const VERSION = '6.3.3';
+const VERSION = '6.3.4';
 const API = 'https://fastshare.cz/api/api_kodi.php';
 const MAX_STREAMS = Number(process.env.MAX_STREAMS || 60);
 const MAX_SEARCH_TERMS = Number(process.env.MAX_SEARCH_TERMS || 24);
@@ -235,7 +235,7 @@ function extractWikidataLocalizedAliases(payload) {
   return [...out.values()];
 }
 function tmdbRequestOptions() {
-  const headers = { Accept: 'application/json', 'User-Agent': 'FastShare-Stremio-Addon/6.3.3' };
+  const headers = { Accept: 'application/json', 'User-Agent': 'FastShare-Stremio-Addon/6.3.4' };
   if (TMDB_READ_ACCESS_TOKEN) headers.Authorization = `Bearer ${TMDB_READ_ACCESS_TOKEN}`;
   return { headers };
 }
@@ -271,7 +271,7 @@ async function fetchWikidataAliases(imdbId) {
   const url = new URL('https://query.wikidata.org/sparql');
   url.searchParams.set('query', query);
   url.searchParams.set('format', 'json');
-  const payload = await fetchJson(url.toString(), { headers: { Accept: 'application/sparql-results+json', 'User-Agent': 'FastShare-Stremio-Addon/6.3.3 (localized title lookup)' } });
+  const payload = await fetchJson(url.toString(), { headers: { Accept: 'application/sparql-results+json', 'User-Agent': 'FastShare-Stremio-Addon/6.3.4 (localized title lookup)' } });
   return { aliases: extractWikidataLocalizedAliases(payload), source: 'wikidata' };
 }
 async function getLocalizedTitleData(type, imdbId) {
@@ -673,7 +673,7 @@ async function getMeta(type, id) {
   const cinemetaPromise = (async () => {
     try {
       const url = `https://v3-cinemeta.strem.io/meta/${type}/${clean}.json`;
-      const json = await fetchJson(url, { headers: { 'User-Agent': 'FastShare-Stremio-Addon/6.3.3' } });
+      const json = await fetchJson(url, { headers: { 'User-Agent': 'FastShare-Stremio-Addon/6.3.4' } });
       return json.meta || {};
     } catch (error) {
       return { name: clean, metadataError: String(error.message || error) };
@@ -800,12 +800,86 @@ function streamUrl(file, hash) {
   const sep = base.includes('?') ? '&' : '?';
   return `${base}${sep}stream=1&session=${esc(hash)}&${esc(file.name)}`;
 }
+function detectBadgeTags(name, file = {}) {
+  const raw = String(name || '');
+  const n = normalize(raw);
+  const tags = [];
+  const add = tag => { if (tag && !tags.includes(tag)) tags.push(tag); };
+
+  // Source / release type. Keep the same spelling used by common Nuvio badge presets.
+  if (/\bremux\b/i.test(raw)) add('REMUX');
+  else if (/\b(?:blu[ ._-]?ray|bdremux|bdrip|brrip)\b/i.test(raw)) add('BluRay');
+  else if (/\b(?:web[ ._-]?dl|webdl|web[ ._-]?rip|webrip)\b/i.test(raw)) add('WEB-DL');
+  else if (/\bhdtv\b/i.test(raw)) add('HDTV');
+
+  const quality = file.quality || detectQuality(raw);
+  if (quality === '4K') add('2160p');
+  else if (quality === '1080p') add('1080p');
+  else if (quality === '720p') add('720p');
+  else if (quality === '480p') add('480p');
+
+  // Visual tags. Specific formats go before generic HDR/IMAX tags.
+  if (/\bimax[ ._-]?enhanced\b/i.test(raw)) add('IMAX Enhanced');
+  else if (/\bimax\b/i.test(raw)) add('IMAX');
+  if (/\b(?:dovi|dolby[ ._-]?vision|dv)\b/i.test(raw)) add('DV');
+  if (/\bhdr[ ._-]?10[ ._-]?(?:\+|plus|p)\b/i.test(raw)) add('HDR10+');
+  else if (/\bhdr[ ._-]?10\b/i.test(raw)) add('HDR10');
+  else if (/\bhdr\b/i.test(raw)) add('HDR');
+
+  // Video codec aliases are normalized so badge regexes do not depend on filename style.
+  if (/\b(?:av1|av01)\b/i.test(raw)) add('AV1');
+  else if (/\b(?:hevc|h[ ._-]?265|x265)\b/i.test(raw)) add('HEVC');
+  else if (/\b(?:avc|h[ ._-]?264|x264)\b/i.test(raw)) add('AVC');
+
+  // Audio formats. Multiple tags are intentional: presets decide which combinations to show.
+  if (/\batmos\b/i.test(raw)) add('Atmos');
+  if (/\btrue[ ._-]?hd\b/i.test(raw)) add('TrueHD');
+  if (/\bdts[ ._:-]?x\b/i.test(raw)) add('DTS:X');
+  else if (/\bdts[ ._-]?(?:hd[ ._-]?)?ma\b/i.test(raw)) add('DTS-HD MA');
+  else if (/\bdts[ ._-]?hd\b/i.test(raw)) add('DTS-HD');
+  else if (/\bdts\b/i.test(raw)) add('DTS');
+  if (/\b(?:ddp(?:[ ._-]?[257][ .][01])?|dd\+|e[ ._-]?ac[ ._-]?3|eac3)\b/i.test(raw)) add('DD+');
+  else if (/\b(?:ac[ ._-]?3|dd(?:2[ .]0|5[ .]1|7[ .]1)?)\b/i.test(raw)) add('DD');
+  if (/\b(?:aac|aac2[ .]0|aac5[ .]1)\b/i.test(raw)) add('AAC');
+
+  // Channel layout. Use the dotted form expected by common presets.
+  const channel = raw.match(/(?:^|[^0-9])([2-8])[ .]([01])(?:[^0-9]|$)/);
+  if (channel) add(`${channel[1]}.${channel[2]}`);
+
+  // Language tokens are based on the already validated audio detector, not loose filename text.
+  const audio = file.audio || detectAudio(raw);
+  const key = String(audio.key || '');
+  if (key.includes('CZ')) add('CZ');
+  if (key.includes('SK')) add('SK');
+  if (key.includes('EN')) add('EN');
+  if (key === 'multi') add('MULTI');
+  if ((audio.subs || []).some(x => /^CZ /i.test(x))) add('CZ SUBS');
+  if ((audio.subs || []).some(x => /^SK /i.test(x))) add('SK SUBS');
+
+  return tags;
+}
 function streamObj(file, hash, recommended) {
   const size = bytesToHuman(file.size);
   const bits = [file.quality, size, file.ext, file.durationText].filter(Boolean).join(' • ');
   const lang = [file.audio.label, ...(file.audio.subs || [])].filter(Boolean).join(' • ');
-  const title = `${recommended ? '⭐ Odporúčané\n' : ''}${file.name}\n${bits}\n${lang}`;
-  return { name: `FastShare${file.audio.key !== 'any' ? ' ' + file.audio.key.replace('-', '/') : ''}`, title, url: streamUrl(file, hash), behaviorHints: { bingeGroup: `fastshare-${file.quality || 'auto'}-${file.audio.key}` } };
+  const badgeTags = detectBadgeTags(file.name, file);
+
+  // Nuvio badge presets match regular expressions against stream.title. Many patterns
+  // are anchored with ^ and use a look-ahead that does not cross a newline, so all
+  // normalized badge tokens must be present on the first line. Previously the first
+  // result started with only "⭐ Odporúčané", hiding its badges.
+  const firstLine = [recommended ? '⭐ Odporúčané' : '', ...badgeTags].filter(Boolean).join(' • ') || 'FastShare';
+  const title = `${firstLine}\n${file.name}\n${bits}\n${lang}`;
+  return {
+    name: `FastShare${file.audio.key !== 'any' ? ' ' + file.audio.key.replace('-', '/') : ''}`,
+    title,
+    url: streamUrl(file, hash),
+    behaviorHints: {
+      bingeGroup: `fastshare-${file.quality || 'auto'}-${file.audio.key}`,
+      filename: file.name,
+      videoSize: Number(file.size || 0) || undefined
+    }
+  };
 }
 async function buildStreamResponse(req, debug = false) {
   const creds = getCredentials(req);
@@ -921,5 +995,7 @@ module.exports = {
   aliasMatchScore,
   titleMatchScore,
   scoreFile,
-  termsFor
+  termsFor,
+  detectBadgeTags,
+  streamObj
 };

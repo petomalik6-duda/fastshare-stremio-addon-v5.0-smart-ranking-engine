@@ -1,0 +1,8 @@
+FastShare Stremio addon v6.3.4
+
+- Nuvio badge compatibility for the supplied Nuvio.json / BetterFormatter-style presets.
+- Keeps all normalized badge tokens on the first line of stream.title.
+- Fixes the recommended result losing badges because "⭐ Odporúčané" was previously alone on line 1.
+- Adds normalized source, resolution, HDR/DV, codec, audio, channel and language tokens.
+- Adds behaviorHints.filename and behaviorHints.videoSize for clients that use structured hints.
+- Preserves localized CZ/SK search, Render fix, Tuner ranking fix and concert-title ranking fix.
