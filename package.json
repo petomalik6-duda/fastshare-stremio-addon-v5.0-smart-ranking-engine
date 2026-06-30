@@ -1,7 +1,7 @@
 {
   "name": "fastshare-stremio-addon-v6-configurator",
-  "version": "6.3.4",
-  "description": "FastShare Stremio addon with automatic Czech/Slovak localized-title discovery and stricter title ranking and Nuvio badge-compatible stream titles.",
+  "version": "6.3.5",
+  "description": "FastShare Stremio addon with localized-title discovery, precise ranking, and a complete Nuvio badge preset including CZ/SK/EN languages, subtitles, codecs, and containers.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

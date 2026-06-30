@@ -2,15 +2,17 @@ const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch');
 const crypto = require('crypto');
+const path = require('path');
 
 const app = express();
 app.use(cors({ origin: '*', methods: ['GET','POST','OPTIONS'], allowedHeaders: ['*'] }));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
+app.use('/badges', express.static(path.join(__dirname, 'public', 'badges'), { maxAge: '30d' }));
 
 const PORT = process.env.PORT || 10000;
 const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
-const VERSION = '6.3.4';
+const VERSION = '6.3.5';
 const API = 'https://fastshare.cz/api/api_kodi.php';
 const MAX_STREAMS = Number(process.env.MAX_STREAMS || 60);
 const MAX_SEARCH_TERMS = Number(process.env.MAX_SEARCH_TERMS || 24);
@@ -23,6 +25,9 @@ const HTTP_TIMEOUT_MS = Number(process.env.HTTP_TIMEOUT_MS || 9000);
 const TMDB_API_KEY = String(process.env.TMDB_API_KEY || '').trim();
 const TMDB_READ_ACCESS_TOKEN = String(process.env.TMDB_READ_ACCESS_TOKEN || process.env.TMDB_ACCESS_TOKEN || process.env.TMDB_BEARER_TOKEN || process.env.TMDB_TOKEN || '').trim();
 const ENABLE_WIKIDATA_ALIASES = String(process.env.ENABLE_WIKIDATA_ALIASES || '1') !== '0';
+const NUVIO_BASE_BADGES_URL = String(process.env.NUVIO_BASE_BADGES_URL || 'https://gist.githubusercontent.com/saif1233/a2b9817bb8a632ae93a6076c1e1459af/raw/f61d444e1cc03e017ba9327a557b4be516e3a340/Nuvio.json').trim();
+const NUVIO_BADGES_CACHE_TTL_MS = Number(process.env.NUVIO_BADGES_CACHE_TTL_MS || 1000 * 60 * 60 * 12);
+let nuvioBaseBadgesCache = null;
 
 // Localized aliases are fetched automatically for every IMDb title. The built-in
 // table remains only as an emergency fallback for verified edge cases. Additional
@@ -847,17 +852,93 @@ function detectBadgeTags(name, file = {}) {
   if (channel) add(`${channel[1]}.${channel[2]}`);
 
   // Language tokens are based on the already validated audio detector, not loose filename text.
+  // Keep the short language token for broad presets and add explicit AUDIO/DABING/SUBS
+  // tokens for the addon's extended Nuvio preset.
   const audio = file.audio || detectAudio(raw);
   const key = String(audio.key || '');
-  if (key.includes('CZ')) add('CZ');
-  if (key.includes('SK')) add('SK');
-  if (key.includes('EN')) add('EN');
-  if (key === 'multi') add('MULTI');
-  if ((audio.subs || []).some(x => /^CZ /i.test(x))) add('CZ SUBS');
-  if ((audio.subs || []).some(x => /^SK /i.test(x))) add('SK SUBS');
+  const audioLabel = String(audio.label || '');
+  if (key.includes('CZ')) { add('CZ'); add('CZ AUDIO'); }
+  if (key.includes('SK')) { add('SK'); add('SK AUDIO'); }
+  if (key.includes('EN')) { add('EN'); add('EN AUDIO'); }
+  if (key === 'multi') { add('MULTI'); add('MULTI AUDIO'); }
+  if (key === 'dub' || /dabing|dubbing|dubbed/i.test(audioLabel)) add('DABING');
+  if (/^CZ titulky/i.test(audioLabel) || (audio.subs || []).some(x => /^CZ /i.test(x))) add('CZ SUBS');
+  if (/^SK titulky/i.test(audioLabel) || (audio.subs || []).some(x => /^SK /i.test(x))) add('SK SUBS');
+
+  // Extra tags absent from the referenced colored preset but useful in Nuvio.
+  if (/\b10[ ._-]?bit\b|\bhi10p\b/i.test(raw)) add('10bit');
+  if (/\bhybrid\b/i.test(raw)) add('HYBRID');
+  if (/\b(?:mkv|matroska)\b/i.test(raw) || String(file.ext || '').toUpperCase() === 'MKV') add('MKV');
+  else if (/\bmp4\b/i.test(raw) || String(file.ext || '').toUpperCase() === 'MP4') add('MP4');
 
   return tags;
 }
+
+function publicBaseUrl(req) {
+  const forwarded = String(req.get('x-forwarded-proto') || '').split(',')[0].trim();
+  const protocol = forwarded || req.protocol || 'https';
+  const host = String(req.get('x-forwarded-host') || req.get('host') || '').split(',')[0].trim();
+  if (host) return `${protocol}://${host}`;
+  return String(process.env.BASE_URL || `http://localhost:${PORT}`).trim().replace(/\/$/, '');
+}
+function nuvioBadgeFilter(baseUrl, { id, name, pattern, image, groupId = 'fastshare-extra', tagColor = '#253047', textColor = '#FFFFFF', borderColor = '#718096' }) {
+  return {
+    borderColor,
+    groupId,
+    id,
+    imageURL: `${baseUrl}/badges/${image}`,
+    isEnabled: true,
+    name,
+    pattern,
+    tagColor,
+    tagStyle: 'filled and bordered',
+    textColor,
+    type: 'filter'
+  };
+}
+function buildExtraNuvioFilters(baseUrl) {
+  const f = (data) => nuvioBadgeFilter(baseUrl, data);
+  return [
+    f({ id: 'fs-recommended', name: 'Odporúčané', pattern: '(?i)\\bOdporúčané\\b', image: 'recommended.png', groupId: 'fs-status', tagColor: '#FFF2B2', textColor: '#181818', borderColor: '#FFD54F' }),
+    f({ id: 'fs-lang-cz', name: 'CZ audio', pattern: '(?i)\\bCZ(?:\\s+AUDIO)?\\b(?!\\s+SUBS)', image: 'cz.png', groupId: 'fs-language', tagColor: '#EAF5FF', textColor: '#111111', borderColor: '#D7141A' }),
+    f({ id: 'fs-lang-sk', name: 'SK audio', pattern: '(?i)\\bSK(?:\\s+AUDIO)?\\b(?!\\s+SUBS)', image: 'sk.png', groupId: 'fs-language', tagColor: '#EAF5FF', textColor: '#111111', borderColor: '#0B4EA2' }),
+    f({ id: 'fs-lang-en', name: 'EN audio', pattern: '(?i)\\bEN(?:\\s+AUDIO)?\\b', image: 'en.png', groupId: 'fs-language', tagColor: '#EAF5FF', textColor: '#111111', borderColor: '#C8102E' }),
+    f({ id: 'fs-lang-multi', name: 'MULTI audio', pattern: '(?i)\\bMULTI(?:\\s+AUDIO)?\\b', image: 'multi.png', groupId: 'fs-language', tagColor: '#E9FFF5', textColor: '#111111', borderColor: '#2F855A' }),
+    f({ id: 'fs-dabing', name: 'Dabing', pattern: '(?i)\\bDABING\\b', image: 'dabing.png', groupId: 'fs-language', tagColor: '#FFF4E5', textColor: '#111111', borderColor: '#DD6B20' }),
+    f({ id: 'fs-subs-cz', name: 'CZ titulky', pattern: '(?i)\\bCZ\\s+SUBS\\b', image: 'cz-subs.png', groupId: 'fs-subs', tagColor: '#F7FAFC', textColor: '#111111', borderColor: '#D7141A' }),
+    f({ id: 'fs-subs-sk', name: 'SK titulky', pattern: '(?i)\\bSK\\s+SUBS\\b', image: 'sk-subs.png', groupId: 'fs-subs', tagColor: '#F7FAFC', textColor: '#111111', borderColor: '#0B4EA2' }),
+    f({ id: 'fs-codec-av1', name: 'AV1', pattern: '(?i)\\bAV1\\b', image: 'av1.png', groupId: 'fs-codec' }),
+    f({ id: 'fs-codec-hevc', name: 'HEVC', pattern: '(?i)\\bHEVC\\b', image: 'hevc.png', groupId: 'fs-codec' }),
+    f({ id: 'fs-codec-avc', name: 'AVC', pattern: '(?i)\\bAVC\\b', image: 'avc.png', groupId: 'fs-codec' }),
+    f({ id: 'fs-audio-aac', name: 'AAC', pattern: '(?i)\\bAAC\\b', image: 'aac.png', groupId: 'fs-audio' }),
+    f({ id: 'fs-10bit', name: '10-bit', pattern: '(?i)\\b10bit\\b', image: '10bit.png', groupId: 'fs-video' }),
+    f({ id: 'fs-hybrid', name: 'Hybrid', pattern: '(?i)\\bHYBRID\\b', image: 'hybrid.png', groupId: 'fs-video' }),
+    f({ id: 'fs-source-hdtv', name: 'HDTV', pattern: '(?i)\\bHDTV\\b', image: 'hdtv.png', groupId: 'fs-source' }),
+    f({ id: 'fs-res-480', name: '480p', pattern: '(?i)\\b480p\\b', image: '480p.png', groupId: 'fs-resolution' }),
+    f({ id: 'fs-container-mkv', name: 'MKV', pattern: '(?i)\\bMKV\\b', image: 'mkv.png', groupId: 'fs-container', tagColor: '#EDF2F7', textColor: '#111111' }),
+    f({ id: 'fs-container-mp4', name: 'MP4', pattern: '(?i)\\bMP4\\b', image: 'mp4.png', groupId: 'fs-container', tagColor: '#EDF2F7', textColor: '#111111' })
+  ];
+}
+async function getBaseNuvioBadgePreset() {
+  if (nuvioBaseBadgesCache && Date.now() < nuvioBaseBadgesCache.expiresAt) return nuvioBaseBadgesCache.value;
+  const value = await fetchJson(NUVIO_BASE_BADGES_URL, { headers: { 'User-Agent': `FastShare-Stremio/${VERSION}` } }, Math.min(HTTP_TIMEOUT_MS, 7000));
+  if (!value || !Array.isArray(value.filters)) throw new Error('Invalid Nuvio badge preset');
+  nuvioBaseBadgesCache = { value, expiresAt: Date.now() + NUVIO_BADGES_CACHE_TTL_MS };
+  return value;
+}
+function mergeNuvioBadgeFilters(baseFilters, extraFilters) {
+  const out = [];
+  const seen = new Set();
+  for (const item of [...(baseFilters || []), ...(extraFilters || [])]) {
+    if (!item || typeof item !== 'object') continue;
+    const key = String(item.id || item.name || '').toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+  }
+  return out;
+}
+
 function streamObj(file, hash, recommended) {
   const size = bytesToHuman(file.size);
   const bits = [file.quality, size, file.ext, file.durationText].filter(Boolean).join(' • ');
@@ -900,6 +981,23 @@ async function buildStreamResponse(req, debug = false) {
 
 app.get('/', (req, res) => res.redirect('/configure'));
 app.get('/health', (req, res) => res.json({ ok: true, version: VERSION }));
+app.get('/nuvio-badges-extra.json', (req, res) => {
+  res.set('Cache-Control', 'public, max-age=3600');
+  res.json({ filters: buildExtraNuvioFilters(publicBaseUrl(req)) });
+});
+app.get('/nuvio-badges.json', async (req, res) => {
+  const extra = buildExtraNuvioFilters(publicBaseUrl(req));
+  try {
+    const base = await getBaseNuvioBadgePreset();
+    res.set('Cache-Control', 'public, max-age=3600');
+    res.json({ ...base, filters: mergeNuvioBadgeFilters(base.filters, extra) });
+  } catch (error) {
+    // The extended filters remain usable even if the external base preset is temporarily unavailable.
+    res.set('X-Nuvio-Base-Preset', 'fallback');
+    res.set('Cache-Control', 'public, max-age=300');
+    res.json({ filters: extra });
+  }
+});
 app.get('/manifest.json', (req, res) => res.json(manifest(null)));
 app.get('/:config/manifest.json', (req, res) => res.json(manifest(req.params.config)));
 
@@ -997,5 +1095,7 @@ module.exports = {
   scoreFile,
   termsFor,
   detectBadgeTags,
+  buildExtraNuvioFilters,
+  mergeNuvioBadgeFilters,
   streamObj
 };

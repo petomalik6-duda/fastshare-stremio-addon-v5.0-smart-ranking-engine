@@ -1,4 +1,4 @@
-# FastShare Stremio Addon v6.3.4
+# FastShare Stremio Addon v6.3.5
 
 Táto verzia všeobecne dopĺňa české a slovenské názvy pre filmy aj seriály podľa IMDb ID. Už nie je odkázaná iba na ručne zapísaný alias jedného filmu.
 
@@ -73,7 +73,7 @@ ENABLE_WIKIDATA_ALIASES=1
 1. Nahraj celý obsah balíka do GitHub repozitára.
 2. V Renderi doplň TMDB token alebo API kľúč.
 3. Spusti **Manual Deploy → Clear build cache & deploy**.
-4. Otvor `/health`; musí vrátiť `"version":"6.3.4"`.
+4. Otvor `/health`; musí vrátiť `"version":"6.3.5"`.
 5. Odstráň starú inštaláciu addonu zo Stremia a znova ho nainštaluj cez `/configure`.
 
 ## Kontrola názvov
@@ -119,10 +119,37 @@ npm test
 npm start
 ```
 
-## Nuvio badges (v6.3.4)
+## Kompletné Nuvio badges (v6.3.5)
 
-This version formats `stream.title` for regex badge presets. Import this URL directly in Nuvio under **Settings → Connected Services → Formatting → Badge URLs**:
+Pôvodný farebný preset neobsahuje filtre pre jazyky. Táto verzia preto poskytuje vlastný zlúčený endpoint:
 
-https://gist.githubusercontent.com/saif1233/a2b9817bb8a632ae93a6076c1e1459af/raw/f61d444e1cc03e017ba9327a557b4be516e3a340/Nuvio.json
+```txt
+https://tvoja-sluzba.onrender.com/nuvio-badges.json
+```
 
-The addon cannot install a client-side badge preset automatically. It ensures the stream title contains standardized tokens on its first line so anchored rules can match: REMUX/BluRay/WEB-DL, 2160p/1080p/720p, DV/HDR10+/HDR10/HDR, HEVC/AVC/AV1, Atmos/TrueHD/DTS/DD+, channels and CZ/SK/EN.
+Tento URL vlož v Nuvio namiesto pôvodného Gist URL. Endpoint načíta pôvodný farebný preset a doplní:
+
+- CZ, SK, EN a MULTI audio,
+- samostatný badge pre dabing,
+- CZ a SK titulky,
+- AV1, HEVC, AVC a AAC,
+- 10-bit a Hybrid,
+- HDTV a 480p,
+- MKV a MP4,
+- badge Odporúčané.
+
+Samostatné doplnkové filtre bez pôvodného farebného presetu sú na:
+
+```txt
+https://tvoja-sluzba.onrender.com/nuvio-badges-extra.json
+```
+
+Obrázky badge servuje priamo addon cez `/badges/`. Prvý riadok `stream.title` obsahuje všetky normalizované tokeny, aby fungovali aj regexy ukotvené na začiatok textu.
+
+Voliteľne možno zmeniť zdroj pôvodného presetu:
+
+```txt
+NUVIO_BASE_BADGES_URL=https://.../iny-preset.json
+```
+
+Po zmene URL v Nuvio urob úplný reštart aplikácie alebo vymaž cache badge konfigurácie.

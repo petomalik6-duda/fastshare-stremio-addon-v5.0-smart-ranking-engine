@@ -1,0 +1,10 @@
+FastShare Stremio addon v6.3.5
+
+- Added /nuvio-badges.json: merged colored Nuvio preset plus addon-specific badges.
+- Added /nuvio-badges-extra.json: only the new addon-specific badges.
+- Added badges for CZ, SK, EN and MULTI audio.
+- Added separate CZ/SK subtitle badges and a dubbing badge.
+- Added AV1, HEVC, AVC, AAC, 10-bit, Hybrid, HDTV, 480p, MKV and MP4 badges.
+- Fixed subtitle-only files so CZ/SK subtitle tags are emitted on the first line.
+- Badge images are served by the addon itself from /badges/.
+- Search, localized titles, ranking and all v6.3.3 fixes are unchanged.
