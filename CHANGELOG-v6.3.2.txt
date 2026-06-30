@@ -1,0 +1,7 @@
+FastShare Stremio Addon v6.3.2
+
+- Opravené falošné priradenie jednoslovných názvov, napr. Tuner -> Lonely Tunes.
+- Jednoslovný názov sa musí zhodovať ako celé slovo; fuzzy rozdiel jedného písmena nestačí.
+- Filmové výsledky bez dostatočne silnej zhody názvu sa vyradia aj vtedy, keď majú CZ/SK dabing a vysokú kvalitu.
+- Pre jednoslovné názvy sa už negeneruje príliš všeobecný štvorpísmenový vyhľadávací kmeň (Tuner -> tune).
+- Zachované automatické CZ/SK názvy, cache, TMDB/Wikidata fallback a Render fix z v6.3.1.
