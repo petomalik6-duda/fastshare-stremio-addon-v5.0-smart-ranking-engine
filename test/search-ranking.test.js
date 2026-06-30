@@ -219,3 +219,46 @@ test('does not generate a broad four-letter stem for a one-word movie title', ()
   assert.ok(terms.includes('tuner'));
   assert.equal(terms.includes('tune'), false);
 });
+
+const sadeMeta = {
+  type: 'movie',
+  imdbId: 'tt3509240',
+  stremioId: 'tt3509240',
+  title: 'Sade: Bring Me Home - Live 2011',
+  year: '2012',
+  raw: { name: 'Sade: Bring Me Home - Live 2011' },
+  localizedAliases: []
+};
+
+test('rejects a different Sade live concert that only matches artist plus Live', () => {
+  const wrong = scoreFile({
+    name: 'Sade.Live.1994.1080p.BluRay.mkv',
+    size: 9 * 1024 ** 3
+  }, sadeMeta, 'movie');
+  assert.equal(wrong, null);
+});
+
+test('rejects a generic Sade Live result even when it contains the title year', () => {
+  const wrong = scoreFile({
+    name: 'Sade.Live.2011.Full.Concert.1080p.mkv',
+    size: 10 * 1024 ** 3
+  }, sadeMeta, 'movie');
+  assert.equal(wrong, null);
+});
+
+test('accepts the correct Sade Bring Me Home Live concert', () => {
+  const correct = scoreFile({
+    name: 'Sade.Bring.Me.Home.Live.2011.1080p.BluRay.mkv',
+    size: 12 * 1024 ** 3
+  }, sadeMeta, 'movie');
+  assert.ok(correct);
+  assert.ok(correct.score >= 200, `score was ${correct.score}`);
+});
+
+test('does not generate broad live or home-only search terms for concert titles', () => {
+  const terms = termsFor(sadeMeta).map(x => x.toLowerCase());
+  assert.ok(terms.includes('sade: bring me home - live 2011'));
+  assert.equal(terms.includes('live'), false);
+  assert.equal(terms.includes('home'), false);
+  assert.equal(terms.some(x => x.includes('2011 2012')), false);
+});

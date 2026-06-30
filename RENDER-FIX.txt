@@ -1,4 +1,4 @@
-FastShare Stremio addon v6.3.2 – Render deployment fix
+FastShare Stremio addon v6.3.3 – Render deployment fix
 
 Render settings:
 Build Command: npm ci --omit=dev --no-audit --no-fund

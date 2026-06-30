@@ -10,7 +10,7 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
 const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
-const VERSION = '6.3.2';
+const VERSION = '6.3.3';
 const API = 'https://fastshare.cz/api/api_kodi.php';
 const MAX_STREAMS = Number(process.env.MAX_STREAMS || 60);
 const MAX_SEARCH_TERMS = Number(process.env.MAX_SEARCH_TERMS || 24);
@@ -235,7 +235,7 @@ function extractWikidataLocalizedAliases(payload) {
   return [...out.values()];
 }
 function tmdbRequestOptions() {
-  const headers = { Accept: 'application/json', 'User-Agent': 'FastShare-Stremio-Addon/6.3.2' };
+  const headers = { Accept: 'application/json', 'User-Agent': 'FastShare-Stremio-Addon/6.3.3' };
   if (TMDB_READ_ACCESS_TOKEN) headers.Authorization = `Bearer ${TMDB_READ_ACCESS_TOKEN}`;
   return { headers };
 }
@@ -271,7 +271,7 @@ async function fetchWikidataAliases(imdbId) {
   const url = new URL('https://query.wikidata.org/sparql');
   url.searchParams.set('query', query);
   url.searchParams.set('format', 'json');
-  const payload = await fetchJson(url.toString(), { headers: { Accept: 'application/sparql-results+json', 'User-Agent': 'FastShare-Stremio-Addon/6.3.2 (localized title lookup)' } });
+  const payload = await fetchJson(url.toString(), { headers: { Accept: 'application/sparql-results+json', 'User-Agent': 'FastShare-Stremio-Addon/6.3.3 (localized title lookup)' } });
   return { aliases: extractWikidataLocalizedAliases(payload), source: 'wikidata' };
 }
 async function getLocalizedTitleData(type, imdbId) {
@@ -447,18 +447,25 @@ function sequelMismatch(name, meta, aliases = getTitleAliases(meta)) {
   }
   return false;
 }
+const GENERIC_MEDIA_TITLE_TOKENS = new Set([
+  'live', 'concert', 'tour', 'show', 'performance', 'special', 'edition',
+  'version', 'complete', 'full', 'movie', 'film', 'video', 'collection'
+]);
+
 function aliasMatchScore(fileName, alias) {
   const file = normalize(fileName);
   const title = normalize(alias);
-  if (!title) return { score: -80, strong: false, ratio: 0, matched: 0, total: 0, strictShortTitle: false };
+  if (!title) return { score: -80, strong: false, ratio: 0, matched: 0, total: 0, strictShortTitle: false, distinctiveMatched: 0, distinctiveTotal: 0 };
 
   const stop = new Set(['the','a','an','and','or','of','to','in','on','at','with','for','from']);
   const titleTokens = title.split(' ').filter(x => (x.length > 1 || /^\d+$/.test(x)) && !stop.has(x));
   const lexicalTokens = titleTokens.filter(x => !/^\d+$/.test(x));
+  const distinctiveTokens = lexicalTokens.filter(x => !GENERIC_MEDIA_TITLE_TOKENS.has(x));
   const strictShortTitle = lexicalTokens.length === 1;
   const fileTokens = file.split(' ').filter(Boolean);
   const used = new Set();
   let matched = 0;
+  let distinctiveMatched = 0;
 
   for (const expected of titleTokens) {
     const isNumber = /^\d+$/.test(expected);
@@ -472,14 +479,23 @@ function aliasMatchScore(fileName, alias) {
     if (index >= 0) {
       used.add(index);
       matched++;
+      if (!isNumber && !GENERIC_MEDIA_TITLE_TOKENS.has(expected)) distinctiveMatched++;
     }
   }
 
   const total = titleTokens.length;
+  const distinctiveTotal = distinctiveTokens.length;
   const ratio = total ? matched / total : 0;
   const exactPhrase = strictShortTitle
     ? total > 0 && matched === total
     : title.length >= 4 && file.includes(title);
+
+  // Two generic/common words must not make a long title a strong match. For
+  // concert releases, "Sade + Live" is not enough for "Sade: Bring Me Home -
+  // Live 2011"; the distinctive subtitle words must also be present.
+  const enoughDistinctive = distinctiveTotal === 0 || distinctiveMatched >= Math.min(2, distinctiveTotal);
+  const strong = exactPhrase || matched === total || ratio >= 0.67 || (matched >= 2 && ratio >= 0.5 && enoughDistinctive);
+
   let score = -80;
   if (exactPhrase) score = 130;
   else if (total && matched === total) score = 110;
@@ -487,11 +503,12 @@ function aliasMatchScore(fileName, alias) {
   else if (matched >= 2) score = 45;
   else if (matched === 1) score = 15;
 
-  return { score, strong: exactPhrase || matched === total || ratio >= 0.67 || matched >= 2, ratio, matched, total, strictShortTitle };
+  return { score, strong, ratio, matched, total, strictShortTitle, distinctiveMatched, distinctiveTotal };
 }
 function titleMatchScore(fileName, meta, type) {
   const aliases = getTitleAliases(meta);
   const year = String(meta.year || meta.releaseInfo || '').match(/\d{4}/)?.[0] || '';
+  const acceptedYears = uniqueStrings([year, ...aliases.flatMap(getYears)]).filter(x => /^(19|20)\d{2}$/.test(x));
   let score = 0, reasons = [];
 
   if (type === 'movie' && hasEpisodePattern(fileName)) {
@@ -521,13 +538,12 @@ function titleMatchScore(fileName, meta, type) {
   else reasons.push('title-miss -80');
 
   const years = getYears(fileName);
-  if (year) {
-    if (years.includes(year)) {
-      score += 50; reasons.push('year +50');
+  if (acceptedYears.length) {
+    if (years.some(y => acceptedYears.includes(y))) {
+      score += 50; reasons.push('year/title-year +50');
     } else if (years.length) {
       const fileYear = Number(years[0]);
-      const metaYear = Number(year);
-      const diff = Math.abs(fileYear - metaYear);
+      const diff = Math.min(...acceptedYears.map(y => Math.abs(fileYear - Number(y))));
 
       // General release-year fix: if the title is a strong match, do not reject only
       // because Cinemeta/TMDB uses a different release year than the filename.
@@ -657,7 +673,7 @@ async function getMeta(type, id) {
   const cinemetaPromise = (async () => {
     try {
       const url = `https://v3-cinemeta.strem.io/meta/${type}/${clean}.json`;
-      const json = await fetchJson(url, { headers: { 'User-Agent': 'FastShare-Stremio-Addon/6.3.2' } });
+      const json = await fetchJson(url, { headers: { 'User-Agent': 'FastShare-Stremio-Addon/6.3.3' } });
       return json.meta || {};
     } catch (error) {
       return { name: clean, metadataError: String(error.message || error) };
@@ -693,19 +709,23 @@ function movieTermsFor(meta) {
     const asciiAlias = normalize(alias);
     full.push(alias);
     if (asciiAlias && asciiAlias.toLocaleLowerCase('en-US') !== String(alias).toLocaleLowerCase('en-US')) full.push(asciiAlias);
-    if (year) {
+    if (year && getYears(alias).length === 0) {
       withYear.push(`${alias} ${year}`);
       if (asciiAlias && asciiAlias.toLocaleLowerCase('en-US') !== String(alias).toLocaleLowerCase('en-US')) withYear.push(`${asciiAlias} ${year}`);
     }
     if (tokens.length >= 2) normalizedTitles.push(tokens.join(' '));
 
-    const words = tokens.filter(x => !/^\d+$/.test(x));
+    const words = tokens.filter(x => !/^\d+$/.test(x) && !GENERIC_MEDIA_TITLE_TOKENS.has(x));
     const last = words[words.length - 1];
     if (last) {
-      distinctive.push(sequel ? `${last} ${sequel}` : last);
-      // Do not search by a four-letter stem for a one-word title. For Tuner,
-      // the broad term "tune" returns unrelated files such as Lonely Tunes.
-      if (last.length >= 5 && words.length >= 2) stems.push(sequel ? `${last.slice(0, 4)} ${sequel}` : last.slice(0, 4));
+      // Single-word searches for long titles are too broad (for example "live"
+      // or "home"). Keep them only for genuinely one-word titles or sequels,
+      // where the number makes the query sufficiently specific.
+      if (sequel) distinctive.push(`${last} ${sequel}`);
+      else if (words.length === 1) distinctive.push(last);
+
+      // Stemmed searches are retained only for sequels such as Prada/Pradu 2.
+      if (sequel && last.length >= 5) stems.push(`${last.slice(0, 4)} ${sequel}`);
     }
   }
 
