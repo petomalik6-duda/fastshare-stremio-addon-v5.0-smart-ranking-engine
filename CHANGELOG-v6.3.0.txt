@@ -1,0 +1,15 @@
+FastShare Stremio Addon v6.3.0
+
+- Automatické získavanie českých a slovenských názvov pre každý IMDb titul.
+- Voliteľná integrácia TMDB cez TMDB_READ_ACCESS_TOKEN alebo TMDB_API_KEY.
+- Bezplatný fallback cez Wikidata bez API kľúča.
+- Získané názvy sa používajú pre filmy aj seriály.
+- Pridaná 30-dňová pamäťová cache s limitom počtu titulov.
+- Prázdne výsledky a dočasné chyby sa cacheujú iba 6 hodín.
+- Výpadok TMDB, Wikidata alebo Cinemety už nezruší celý stream endpoint.
+- Pridané vyhľadávacie varianty bez diakritiky.
+- Lokalizované celé názvy majú prioritu pred skrátenými a stemovými dotazmi.
+- Vyhľadávanie FastShare beží s obmedzenou paralelizáciou.
+- Pridaný debug endpoint /debug/meta/:type/:id.json.
+- Ručné TITLE_ALIASES_JSON a vstavané aliasy zostávajú ako fallback.
+- Verzia servera a balíka zvýšená na 6.3.0.

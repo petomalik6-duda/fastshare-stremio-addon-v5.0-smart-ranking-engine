@@ -10,11 +10,51 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
 const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
-const VERSION = '6.1.2';
+const VERSION = '6.3.0';
 const API = 'https://fastshare.cz/api/api_kodi.php';
 const MAX_STREAMS = Number(process.env.MAX_STREAMS || 60);
+const MAX_SEARCH_TERMS = Number(process.env.MAX_SEARCH_TERMS || 24);
+const MAX_TITLE_ALIASES = Number(process.env.MAX_TITLE_ALIASES || 12);
+const SEARCH_CONCURRENCY = Math.max(1, Math.min(6, Number(process.env.SEARCH_CONCURRENCY || 3)));
+const METADATA_NEGATIVE_CACHE_TTL_MS = Number(process.env.METADATA_NEGATIVE_CACHE_TTL_MS || 1000 * 60 * 60 * 6);
+const METADATA_CACHE_TTL_MS = Number(process.env.METADATA_CACHE_TTL_MS || 1000 * 60 * 60 * 24 * 30);
+const METADATA_CACHE_MAX = Number(process.env.METADATA_CACHE_MAX || 2000);
+const HTTP_TIMEOUT_MS = Number(process.env.HTTP_TIMEOUT_MS || 9000);
+const TMDB_API_KEY = String(process.env.TMDB_API_KEY || '').trim();
+const TMDB_READ_ACCESS_TOKEN = String(process.env.TMDB_READ_ACCESS_TOKEN || process.env.TMDB_ACCESS_TOKEN || process.env.TMDB_BEARER_TOKEN || process.env.TMDB_TOKEN || '').trim();
+const ENABLE_WIKIDATA_ALIASES = String(process.env.ENABLE_WIKIDATA_ALIASES || '1') !== '0';
+
+// Localized aliases are fetched automatically for every IMDb title. The built-in
+// table remains only as an emergency fallback for verified edge cases. Additional
+// aliases can be supplied through TITLE_ALIASES_JSON env as:
+// {"tt1234567":["Czech title","Slovak title"]}
+const BUILTIN_TITLE_ALIASES = Object.freeze({
+  tt33612209: [
+    'The Devil Wears Prada 2',
+    'Dabel nosi Pradu 2',
+    'Diabol nosi Pradu 2'
+  ]
+});
+
+function loadEnvTitleAliases() {
+  try {
+    const parsed = JSON.parse(process.env.TITLE_ALIASES_JSON || '{}');
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const out = {};
+    for (const [id, aliases] of Object.entries(parsed)) {
+      if (!/^tt\d+$/.test(id) || !Array.isArray(aliases)) continue;
+      out[id] = aliases.filter(x => typeof x === 'string' && x.trim()).slice(0, 20);
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+const ENV_TITLE_ALIASES = loadEnvTitleAliases();
 
 const authCache = new Map();
+const localizedMetaCache = new Map();
 
 function b64urlEncode(obj) {
   return Buffer.from(JSON.stringify(obj), 'utf8').toString('base64url');
@@ -28,6 +68,259 @@ function normalize(s) {
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .replace(/&amp;/g, '&').replace(/&#39;/g, "'")
     .replace(/[^a-z0-9]+/g, ' ').trim();
+}
+function uniqueStrings(values) {
+  const seen = new Set();
+  const out = [];
+  for (const value of values || []) {
+    const text = String(value || '').trim();
+    const key = normalize(text);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(text);
+  }
+  return out;
+}
+function uniqueSearchTerms(values) {
+  const seen = new Set();
+  const out = [];
+  for (const value of values || []) {
+    const text = String(value || '').replace(/\s+/g, ' ').trim();
+    const key = text.toLocaleLowerCase('en-US');
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(text);
+  }
+  return out;
+}
+function levenshtein(a, b) {
+  a = String(a || ''); b = String(b || '');
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  const prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  const curr = new Array(b.length + 1);
+  for (let i = 1; i <= a.length; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      curr[j] = Math.min(
+        curr[j - 1] + 1,
+        prev[j] + 1,
+        prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+    }
+    for (let j = 0; j <= b.length; j++) prev[j] = curr[j];
+  }
+  return prev[b.length];
+}
+function fuzzyTokenMatch(expected, actual) {
+  if (!expected || !actual) return false;
+  if (expected === actual) return true;
+  if (expected.length >= 5 && actual.length >= 5 && expected.slice(0, 4) === actual.slice(0, 4)) return true;
+  const maxLen = Math.max(expected.length, actual.length);
+  return maxLen >= 4 && Math.abs(expected.length - actual.length) <= 1 && levenshtein(expected, actual) <= 1;
+}
+function extractAliasValues(raw) {
+  const values = [];
+  const keys = ['name', 'title', 'originalName', 'originalTitle', 'localizedTitle', 'localTitle'];
+  for (const key of keys) if (raw && typeof raw[key] === 'string') values.push(raw[key]);
+  const listKeys = ['aliases', 'alternativeTitles', 'alternateTitles', 'aka', 'akas'];
+  for (const key of listKeys) {
+    const list = raw && raw[key];
+    if (!Array.isArray(list)) continue;
+    for (const item of list) {
+      if (typeof item === 'string') values.push(item);
+      else if (item && typeof item === 'object') values.push(item.title, item.name);
+    }
+  }
+  return values.filter(Boolean);
+}
+function getTitleAliases(meta) {
+  const imdbId = String(meta?.imdbId || '').split(':')[0];
+  return uniqueStrings([
+    ...(ENV_TITLE_ALIASES[imdbId] || []),
+    ...(BUILTIN_TITLE_ALIASES[imdbId] || []),
+    ...(meta?.localizedAliases || []),
+    meta?.title,
+    ...extractAliasValues(meta?.raw || {})
+  ]).slice(0, MAX_TITLE_ALIASES);
+}
+
+function trimCache(map, maxEntries = METADATA_CACHE_MAX) {
+  while (map.size > maxEntries) map.delete(map.keys().next().value);
+}
+function getFreshCache(map, key, ttl = METADATA_CACHE_TTL_MS) {
+  const entry = map.get(key);
+  if (!entry) return null;
+  const expiresAt = entry.expiresAt || (entry.ts + ttl);
+  if (Date.now() > expiresAt) {
+    map.delete(key);
+    return null;
+  }
+  map.delete(key);
+  map.set(key, entry);
+  return entry.value;
+}
+function setCache(map, key, value, ttl = METADATA_CACHE_TTL_MS) {
+  map.delete(key);
+  const ts = Date.now();
+  map.set(key, { value, ts, expiresAt: ts + ttl });
+  trimCache(map);
+}
+function safeUrlForError(value) {
+  try {
+    const url = new URL(String(value));
+    for (const key of ['api_key', 'token', 'access_token', 'session', 'password', 'login']) {
+      if (url.searchParams.has(key)) url.searchParams.set(key, '[redacted]');
+    }
+    return `${url.origin}${url.pathname}${url.search}`;
+  } catch {
+    return '[invalid-url]';
+  }
+}
+async function fetchJson(url, options = {}, timeoutMs = HTTP_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...options, signal: controller.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status} from ${safeUrlForError(url)}`);
+    return await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+function addAlias(out, value, source, language = '') {
+  const title = String(value || '').trim();
+  if (!title) return;
+  const key = normalize(title);
+  if (!key) return;
+  const current = out.get(key);
+  if (!current) out.set(key, { title, source, language });
+  else if (!current.language && language) out.set(key, { title, source, language });
+}
+function extractTmdbLocalizedAliases(type, payloads = []) {
+  const out = new Map();
+  for (const payload of payloads.filter(Boolean)) {
+    addAlias(out, payload.title, 'tmdb', payload.__language || '');
+    addAlias(out, payload.name, 'tmdb', payload.__language || '');
+    addAlias(out, payload.original_title, 'tmdb', 'original');
+    addAlias(out, payload.original_name, 'tmdb', 'original');
+    const alternative = payload.alternative_titles || payload.alternativeTitles || {};
+    const titles = alternative.titles || alternative.results || [];
+    for (const item of Array.isArray(titles) ? titles : []) {
+      const country = String(item.iso_3166_1 || '').toUpperCase();
+      if (!country || ['CZ', 'SK', 'CS'].includes(country)) addAlias(out, item.title || item.name, 'tmdb-alt', country.toLowerCase());
+    }
+    const translations = payload.translations?.translations || payload.translations || [];
+    for (const item of Array.isArray(translations) ? translations : []) {
+      const lang = String(item.iso_639_1 || '').toLowerCase();
+      const country = String(item.iso_3166_1 || '').toUpperCase();
+      if (!['cs', 'sk'].includes(lang) && !['CZ', 'SK', 'CS'].includes(country)) continue;
+      addAlias(out, item.data?.title || item.data?.name, 'tmdb-translation', lang || country.toLowerCase());
+    }
+  }
+  return [...out.values()];
+}
+function extractWikidataLocalizedAliases(payload) {
+  const out = new Map();
+  const rows = payload?.results?.bindings || [];
+  for (const row of Array.isArray(rows) ? rows : []) {
+    for (const key of ['label', 'altLabel', 'title']) {
+      const cell = row?.[key];
+      const lang = String(cell?.['xml:lang'] || '').toLowerCase();
+      if (lang && !['cs', 'sk', 'en'].includes(lang)) continue;
+      addAlias(out, cell?.value, 'wikidata', lang);
+    }
+  }
+  return [...out.values()];
+}
+function tmdbRequestOptions() {
+  const headers = { Accept: 'application/json', 'User-Agent': 'FastShare-Stremio-Addon/6.3.0' };
+  if (TMDB_READ_ACCESS_TOKEN) headers.Authorization = `Bearer ${TMDB_READ_ACCESS_TOKEN}`;
+  return { headers };
+}
+function tmdbUrl(path, params = {}) {
+  const url = new URL(`https://api.themoviedb.org/3${path}`);
+  for (const [key, value] of Object.entries(params)) if (value !== '' && value != null) url.searchParams.set(key, value);
+  if (TMDB_API_KEY && !TMDB_READ_ACCESS_TOKEN) url.searchParams.set('api_key', TMDB_API_KEY);
+  return url.toString();
+}
+async function fetchTmdbAliases(type, imdbId) {
+  if (!TMDB_API_KEY && !TMDB_READ_ACCESS_TOKEN) return { aliases: [], source: 'tmdb-disabled' };
+  const find = await fetchJson(tmdbUrl(`/find/${encodeURIComponent(imdbId)}`, { external_source: 'imdb_id' }), tmdbRequestOptions());
+  const isSeries = type === 'series';
+  const hit = isSeries ? find.tv_results?.[0] : find.movie_results?.[0];
+  if (!hit?.id) return { aliases: [], source: 'tmdb-not-found' };
+  const mediaPath = isSeries ? `/tv/${hit.id}` : `/movie/${hit.id}`;
+  const [cs, sk] = await Promise.all([
+    fetchJson(tmdbUrl(mediaPath, { language: 'cs-CZ', append_to_response: 'alternative_titles,translations' }), tmdbRequestOptions()).then(x => ({ ...x, __language: 'cs' })),
+    fetchJson(tmdbUrl(mediaPath, { language: 'sk-SK', append_to_response: 'alternative_titles,translations' }), tmdbRequestOptions()).then(x => ({ ...x, __language: 'sk' }))
+  ]);
+  return { aliases: extractTmdbLocalizedAliases(type, [hit, cs, sk]), source: 'tmdb', tmdbId: hit.id };
+}
+async function fetchWikidataAliases(imdbId) {
+  if (!ENABLE_WIKIDATA_ALIASES) return { aliases: [], source: 'wikidata-disabled' };
+  const safeId = String(imdbId || '').replace(/[^a-zA-Z0-9]/g, '');
+  if (!/^tt\d+$/.test(safeId)) return { aliases: [], source: 'wikidata-invalid-id' };
+  const query = `SELECT ?item ?label ?altLabel ?title WHERE {
+    ?item wdt:P345 "${safeId}" .
+    OPTIONAL { ?item rdfs:label ?label . FILTER(LANG(?label) IN ("cs", "sk", "en", "")) }
+    OPTIONAL { ?item skos:altLabel ?altLabel . FILTER(LANG(?altLabel) IN ("cs", "sk", "en", "")) }
+    OPTIONAL { ?item wdt:P1476 ?title . FILTER(LANG(?title) IN ("cs", "sk", "en", "")) }
+  } LIMIT 120`;
+  const url = new URL('https://query.wikidata.org/sparql');
+  url.searchParams.set('query', query);
+  url.searchParams.set('format', 'json');
+  const payload = await fetchJson(url.toString(), { headers: { Accept: 'application/sparql-results+json', 'User-Agent': 'FastShare-Stremio-Addon/6.3.0 (localized title lookup)' } });
+  return { aliases: extractWikidataLocalizedAliases(payload), source: 'wikidata' };
+}
+async function getLocalizedTitleData(type, imdbId) {
+  const cacheKey = `${type}:${imdbId}`;
+  const cached = getFreshCache(localizedMetaCache, cacheKey);
+  if (cached) return { ...cached, cache: 'hit' };
+
+  const sources = [];
+  const aliases = [];
+  let tmdbId = null;
+  const tasks = [
+    fetchTmdbAliases(type, imdbId).catch(error => ({ aliases: [], source: 'tmdb-error', error: String(error.message || error) })),
+    fetchWikidataAliases(imdbId).catch(error => ({ aliases: [], source: 'wikidata-error', error: String(error.message || error) }))
+  ];
+  for (const result of await Promise.all(tasks)) {
+    sources.push({ source: result.source, count: result.aliases?.length || 0, ...(result.error ? { error: result.error } : {}) });
+    aliases.push(...(result.aliases || []));
+    if (result.tmdbId) tmdbId = result.tmdbId;
+  }
+  const values = uniqueStrings(aliases.map(x => x.title));
+  const value = { aliases: values, aliasDetails: aliases, sources, tmdbId, cache: 'miss' };
+  const ttl = values.length ? METADATA_CACHE_TTL_MS : METADATA_NEGATIVE_CACHE_TTL_MS;
+  setCache(localizedMetaCache, cacheKey, value, ttl);
+  return value;
+}
+function extractSequelNumber(value) {
+  const raw = String(value || '')
+    .replace(/\b(?:ddp?|aac|ac3|dts)[ ._-]?(?:2|5|7)[ ._-]?1\b/gi, ' ')
+    .replace(/\b(?:x|h)[ ._-]?26[45]\b/gi, ' ');
+  const n = normalize(raw)
+    .replace(/\b(19\d{2}|20\d{2}|2160p|1080p|720p|480p)\b/g, ' ')
+    .replace(/\b(cz|cze|sk|svk|en|eng|dabing|dubbing|dub|web|webrip|webdl|bluray|brrip|hdr|mkv|mp4|avi)\b/g, ' ')
+    .replace(/\s+/g, ' ').trim();
+  const patterns = [
+    /\b(?:part|chapter|cast|dil|film)\s*(\d{1,2})\b/,
+    /\b(?:part|chapter)\s*(ii|iii|iv|v)\b/,
+    /\b(\d{1,2})\s*$/,
+    /\b(ii|iii|iv|v)\s*$/
+  ];
+  for (const rx of patterns) {
+    const m = n.match(rx);
+    if (!m) continue;
+    const token = m[1];
+    if (/^\d+$/.test(token)) return Number(token);
+    return ({ ii: 2, iii: 3, iv: 4, v: 5 })[token] || 0;
+  }
+  const standalone = [...n.matchAll(/\b([2-5])\b/g)];
+  if (standalone.length) return Number(standalone[standalone.length - 1][1]);
+  return 0;
 }
 function slug(s) { return normalize(s).replace(/\s+/g, '-'); }
 function esc(s) { return encodeURIComponent(String(s || '')); }
@@ -73,6 +366,7 @@ function detectAudio(name) {
   const hasSK = /(^|[^a-z])(sk|svk|slovak|slovensky)([^a-z]|$)/.test(n);
   const hasEN = /(^|[^a-z])(en|eng|english)([^a-z]|$)/.test(n);
   const explicitMulti = /multi\s*audio|dual\s*audio|dual/.test(n);
+  const genericDub = /\b(dab|dub|dabing|dubbing|dubbed)\b/.test(n);
 
   let label = 'Audio neznáme', key = 'any', score = 0;
 
@@ -83,6 +377,7 @@ function detectAudio(name) {
   else if (hasSK && hasEN && !skSubs) { label = 'SK/EN Audio'; key = 'SK-EN'; score = 55; }
   else if (enStrong || hasEN) { label = 'EN Audio'; key = 'EN'; score = 40; }
   else if (explicitMulti) { label = 'Multi Audio'; key = 'multi'; score = 30; }
+  else if (genericDub) { label = 'Dabing – jazyk neznámy'; key = 'dub'; score = 55; }
   else if (czSubs) { label = 'CZ titulky'; key = 'sub'; score = 5; }
   else if (skSubs) { label = 'SK titulky'; key = 'sub'; score = 5; }
   else if (hasCZ) { label = 'CZ neoverené'; key = 'CZ'; score = 20; }
@@ -136,16 +431,55 @@ function seriesEpisodeMismatch(name, meta) {
 function getYears(name) {
   return [...String(name || '').matchAll(/\b(19\d{2}|20\d{2})\b/g)].map(m => m[1]);
 }
-function sequelMismatch(name, title, year) {
-  const n = normalize(name), t = normalize(title);
-  if (!t) return false;
-  if (t === 'avatar' && /\bavatar\s*(2|two)\b/.test(n)) return true;
-  if (t === 'dune' && /\bdune\s*(2|part\s*two|cast\s*two)\b/.test(n) && String(year) !== '2024') return true;
+function sequelMismatch(name, meta, aliases = getTitleAliases(meta)) {
+  const expected = aliases.map(extractSequelNumber).find(n => n >= 2 && n <= 5) || 0;
+  if (!expected) return false;
+
+  const candidate = extractSequelNumber(name);
+  if (candidate && candidate !== expected) return true;
+
+  // A translated filename may omit the sequel number, but a matching release
+  // year is sufficient evidence. A clearly different year is the original film.
+  if (!candidate) {
+    const metaYear = String(meta.year || meta.releaseInfo || '').match(/\d{4}/)?.[0] || '';
+    const years = getYears(name);
+    if (metaYear && years.length && !years.includes(metaYear)) return true;
+  }
   return false;
 }
-function titleMatchScore(fileName, meta, type) {
-  const title = normalize(meta.title || meta.name || '');
+function aliasMatchScore(fileName, alias) {
   const file = normalize(fileName);
+  const title = normalize(alias);
+  if (!title) return { score: -80, strong: false, ratio: 0, matched: 0, total: 0 };
+
+  const stop = new Set(['the','a','an','and','or','of','to','in','on','at','with','for','from']);
+  const titleTokens = title.split(' ').filter(x => (x.length > 1 || /^\d+$/.test(x)) && !stop.has(x));
+  const fileTokens = file.split(' ').filter(Boolean);
+  const used = new Set();
+  let matched = 0;
+
+  for (const expected of titleTokens) {
+    const index = fileTokens.findIndex((actual, i) => !used.has(i) && fuzzyTokenMatch(expected, actual));
+    if (index >= 0) {
+      used.add(index);
+      matched++;
+    }
+  }
+
+  const total = titleTokens.length;
+  const ratio = total ? matched / total : 0;
+  const exactPhrase = title.length >= 4 && file.includes(title);
+  let score = -80;
+  if (exactPhrase) score = 130;
+  else if (total && matched === total) score = 110;
+  else if (ratio >= 0.67) score = 75;
+  else if (matched >= 2) score = 45;
+  else if (matched === 1) score = 15;
+
+  return { score, strong: exactPhrase || matched === total || ratio >= 0.67 || matched >= 2, ratio, matched, total };
+}
+function titleMatchScore(fileName, meta, type) {
+  const aliases = getTitleAliases(meta);
   const year = String(meta.year || meta.releaseInfo || '').match(/\d{4}/)?.[0] || '';
   let score = 0, reasons = [];
 
@@ -155,17 +489,17 @@ function titleMatchScore(fileName, meta, type) {
   if (type === 'series' && seriesEpisodeMismatch(fileName, meta)) {
     return { reject: true, score: -999, reasons: ['series-episode-mismatch reject'] };
   }
-  if (sequelMismatch(fileName, meta.title, year)) {
+  if (sequelMismatch(fileName, meta, aliases)) {
     return { reject: true, score: -999, reasons: ['sequel-mismatch reject'] };
   }
 
-  const tokens = title.split(' ').filter(x => x.length > 1);
-  const hit = tokens.filter(tok => file.includes(tok)).length;
-  const strongTitle = Boolean(tokens.length && (hit === tokens.length || hit >= 2 || (hit / tokens.length) >= 0.67));
-
-  if (tokens.length && hit === tokens.length) { score += 100; reasons.push('exact-title +100'); }
-  else if (hit > 0) { const pts = Math.min(50, hit * 15); score += pts; reasons.push(`title-tokens +${pts}`); }
-  else { score -= 80; reasons.push('title-miss -80'); }
+  const candidates = aliases.map(alias => ({ alias, ...aliasMatchScore(fileName, alias) }));
+  const best = candidates.sort((a, b) => b.score - a.score || b.ratio - a.ratio)[0] || { alias: meta.title || '', score: -80, strong: false, matched: 0, total: 0 };
+  const strongTitle = best.strong;
+  score += best.score;
+  if (best.score >= 110) reasons.push(`title-alias-exact +${best.score} (${best.alias})`);
+  else if (best.score > 0) reasons.push(`title-alias-partial +${best.score} (${best.matched}/${best.total})`);
+  else reasons.push('title-miss -80');
 
   const years = getYears(fileName);
   if (year) {
@@ -297,53 +631,116 @@ async function login(creds) {
   return { ok: true, hash, source: 'login', status: res.status };
 }
 async function getMeta(type, id) {
-  if (!id.startsWith('tt')) return { type, imdbId: id, stremioId: id, title: id, year: '', season: null, episode: null, raw: {} };
-  const clean = id.split(':')[0];
-  const url = `https://v3-cinemeta.strem.io/meta/${type}/${clean}.json`;
-  const res = await fetch(url); const json = await res.json();
-  const meta = json.meta || {};
-  const parts = id.split(':');
-  return { type, imdbId: clean, stremioId: id, title: meta.name || meta.title || clean, year: String(meta.year || meta.releaseInfo || '').slice(0,4), season: parts[1] ? Number(parts[1]) : null, episode: parts[2] ? Number(parts[2]) : null, raw: meta };
+  const parts = String(id || '').split(':');
+  const clean = parts[0];
+  if (!clean.startsWith('tt')) return { type, imdbId: clean, stremioId: id, title: clean, year: '', season: parts[1] ? Number(parts[1]) : null, episode: parts[2] ? Number(parts[2]) : null, raw: {}, localizedAliases: [], localizedTitleData: { sources: [] } };
+
+  const cinemetaPromise = (async () => {
+    try {
+      const url = `https://v3-cinemeta.strem.io/meta/${type}/${clean}.json`;
+      const json = await fetchJson(url, { headers: { 'User-Agent': 'FastShare-Stremio-Addon/6.3.0' } });
+      return json.meta || {};
+    } catch (error) {
+      return { name: clean, metadataError: String(error.message || error) };
+    }
+  })();
+  const localizedPromise = getLocalizedTitleData(type, clean);
+  const [meta, localized] = await Promise.all([cinemetaPromise, localizedPromise]);
+  return {
+    type,
+    imdbId: clean,
+    stremioId: id,
+    title: meta.name || meta.title || clean,
+    year: String(meta.year || meta.releaseInfo || '').slice(0, 4),
+    season: parts[1] ? Number(parts[1]) : null,
+    episode: parts[2] ? Number(parts[2]) : null,
+    raw: meta,
+    localizedAliases: localized.aliases,
+    localizedTitleData: localized
+  };
+}
+function significantTitleTokens(title) {
+  const stop = new Set(['the','a','an','and','or','of','to','in','on','at','with','for','from']);
+  return normalize(title).split(' ').filter(x => (x.length > 2 || /^\d+$/.test(x)) && !stop.has(x));
+}
+function movieTermsFor(meta) {
+  const aliases = getTitleAliases(meta);
+  const year = String(meta.year || '').match(/\d{4}/)?.[0] || '';
+  const full = [], withYear = [], normalizedTitles = [], distinctive = [], stems = [];
+
+  for (const alias of aliases) {
+    const tokens = significantTitleTokens(alias);
+    const sequel = extractSequelNumber(alias);
+    const asciiAlias = normalize(alias);
+    full.push(alias);
+    if (asciiAlias && asciiAlias.toLocaleLowerCase('en-US') !== String(alias).toLocaleLowerCase('en-US')) full.push(asciiAlias);
+    if (year) {
+      withYear.push(`${alias} ${year}`);
+      if (asciiAlias && asciiAlias.toLocaleLowerCase('en-US') !== String(alias).toLocaleLowerCase('en-US')) withYear.push(`${asciiAlias} ${year}`);
+    }
+    if (tokens.length >= 2) normalizedTitles.push(tokens.join(' '));
+
+    const words = tokens.filter(x => !/^\d+$/.test(x));
+    const last = words[words.length - 1];
+    if (last) {
+      distinctive.push(sequel ? `${last} ${sequel}` : last);
+      if (last.length >= 5) stems.push(sequel ? `${last.slice(0, 4)} ${sequel}` : last.slice(0, 4));
+    }
+  }
+
+  // Full localized names are intentionally placed first so MAX_SEARCH_TERMS
+  // cannot discard them in favour of stemmed variants of the English title.
+  const arr = [...full, ...withYear, ...normalizedTitles, ...distinctive, ...stems];
+  if (meta.imdbId) arr.push(meta.imdbId);
+  return uniqueSearchTerms(arr).slice(0, MAX_SEARCH_TERMS);
 }
 function termsFor(meta) {
-  const title = meta.title || '';
-  const arr = [];
-
   if (meta.type === 'series' && meta.season && meta.episode) {
     const s = Number(meta.season);
     const e = Number(meta.episode);
     const sp = String(s).padStart(2, '0');
     const ep = String(e).padStart(2, '0');
+    const titles = getTitleAliases(meta);
+    const exact = [], alternateEpisode = [], shortened = [], titleOnly = [];
 
-    const titles = [title];
-    const normalizedTitle = normalize(title);
-    const tokens = normalizedTitle.split(' ').filter(x => x.length > 2 && !['the','and','for','with','from'].includes(x));
-    if (tokens.length >= 2) titles.push(tokens.join(' '));
-    if (tokens.length >= 1) titles.push(tokens[tokens.length - 1]);
+    for (const title of titles) {
+      const asciiTitle = normalize(title);
+      const fullVariants = uniqueSearchTerms([title, asciiTitle]);
+      const tokens = significantTitleTokens(title).filter(x => !/^\d+$/.test(x));
+      const shortVariants = uniqueSearchTerms([
+        tokens.length >= 2 ? tokens.join(' ') : '',
+        tokens.length ? tokens[tokens.length - 1] : ''
+      ]);
 
-    for (const t of [...new Set(titles.filter(Boolean))]) {
-      arr.push(`${t} S${sp}E${ep}`);
-      arr.push(`${t} S${s}E${e}`);
-      arr.push(`${t} ${s}x${ep}`);
-      arr.push(`${t} ${s}x${e}`);
-      arr.push(`${t} season ${s} episode ${e}`);
-      arr.push(`${t} ep ${e}`);
-      arr.push(`${t}`);
+      for (const variant of fullVariants) {
+        exact.push(`${variant} S${sp}E${ep}`);
+        alternateEpisode.push(`${variant} ${s}x${ep}`, `${variant} season ${s} episode ${e}`);
+        titleOnly.push(variant);
+      }
+      for (const variant of shortVariants) {
+        shortened.push(`${variant} S${sp}E${ep}`, `${variant} ${s}x${ep}`);
+      }
     }
 
-    // Last-resort query by imdb/title only is intentionally kept last.
-    return [...new Set(arr.filter(Boolean))];
+    const arr = [...exact, ...alternateEpisode, ...shortened, ...titleOnly];
+    if (meta.imdbId) arr.push(`${meta.imdbId} S${sp}E${ep}`);
+    return uniqueSearchTerms(arr).slice(0, MAX_SEARCH_TERMS);
   }
 
-  if (title) arr.push(title);
-  if (title && meta.year) arr.push(`${title} ${meta.year}`);
-
-  // General fallback for titles where FastShare stores a translated title or a different release year.
-  const tokens = normalize(title).split(' ').filter(x => x.length > 2 && !['the','and','for','with','from'].includes(x));
-  if (tokens.length >= 2) arr.push(tokens.join(' '));
-  if (tokens.length >= 1) arr.push(tokens[tokens.length - 1]);
-
-  return [...new Set(arr.filter(Boolean))];
+  return movieTermsFor(meta);
+}
+async function mapWithConcurrency(items, limit, worker) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  async function run() {
+    while (true) {
+      const index = nextIndex++;
+      if (index >= items.length) return;
+      results[index] = await worker(items[index], index);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, run));
+  return results;
 }
 function mapFile(raw) {
   const name = raw.filename || raw.name || '';
@@ -376,13 +773,9 @@ async function buildStreamResponse(req, debug = false) {
   const meta = await getMeta(type, id);
   if (!auth.ok) return debug ? { ok: true, version: VERSION, auth, streams: [] } : { streams: [] };
   const terms = termsFor(meta);
-  const searches = [];
-  let all = [];
-  for (const term of terms) {
-    const r = await searchFastshare(term, auth.hash);
-    searches.push({ term: r.term, status: r.status, resultCount: r.resultCount, apiUrl: r.apiUrl, firstFiles: r.files.slice(0,3) });
-    all.push(...r.files);
-  }
+  const searchResults = await mapWithConcurrency(terms, SEARCH_CONCURRENCY, term => searchFastshare(term, auth.hash));
+  const searches = searchResults.map(r => ({ term: r.term, status: r.status, resultCount: r.resultCount, apiUrl: r.apiUrl, firstFiles: r.files.slice(0,3) }));
+  const all = searchResults.flatMap(r => r.files);
   const scored = all.map(f => scoreFile(f, meta, type)).filter(Boolean).filter(f => f.score > (type === 'series' ? 20 : 50));
   const sorted = dedupe(scored).sort((a,b) => b.score - a.score).slice(0, MAX_STREAMS);
   const streams = sorted.map((f, i) => streamObj(f, auth.hash, i === 0));
@@ -463,10 +856,29 @@ app.get('/debug/login', async (req, res) => res.json({ ok: true, version: VERSIO
 app.get('/:config/debug/login', async (req, res) => res.json({ ok: true, version: VERSION, login: await login(getCredentials(req)) }));
 app.get('/debug/search', async (req, res) => { const auth = await login(getCredentials(req)); if (!auth.ok) return res.json({ ok: true, version: VERSION, auth, resultCount: 0, files: [] }); const r = await searchFastshare(req.query.term || 'avatar', auth.hash); res.json({ ok: true, version: VERSION, auth: { ok: true, hasHash: true }, ...r }); });
 app.get('/:config/debug/search', async (req, res) => { const auth = await login(getCredentials(req)); if (!auth.ok) return res.json({ ok: true, version: VERSION, auth, resultCount: 0, files: [] }); const r = await searchFastshare(req.query.term || 'avatar', auth.hash); res.json({ ok: true, version: VERSION, auth: { ok: true, hasHash: true }, ...r }); });
+app.get('/debug/meta/:type/:id.json', async (req, res) => { try { const meta = await getMeta(req.params.type, req.params.id); res.json({ ok: true, version: VERSION, meta, aliases: getTitleAliases(meta), terms: termsFor(meta) }); } catch (e) { res.status(500).json({ ok:false, version: VERSION, error: String(e.stack || e) }); } });
+app.get('/:config/debug/meta/:type/:id.json', async (req, res) => { try { const meta = await getMeta(req.params.type, req.params.id); res.json({ ok: true, version: VERSION, meta, aliases: getTitleAliases(meta), terms: termsFor(meta) }); } catch (e) { res.status(500).json({ ok:false, version: VERSION, error: String(e.stack || e) }); } });
 
 app.get('/stream/:type/:id.json', async (req, res) => { try { res.json(await buildStreamResponse(req, false)); } catch (e) { res.json({ streams: [] }); } });
 app.get('/:config/stream/:type/:id.json', async (req, res) => { try { res.json(await buildStreamResponse(req, false)); } catch (e) { res.json({ streams: [] }); } });
 app.get('/debug/stream/:type/:id.json', async (req, res) => { try { res.json(await buildStreamResponse(req, true)); } catch (e) { res.status(500).json({ ok:false, version: VERSION, error: String(e.stack || e) }); } });
 app.get('/:config/debug/stream/:type/:id.json', async (req, res) => { try { res.json(await buildStreamResponse(req, true)); } catch (e) { res.status(500).json({ ok:false, version: VERSION, error: String(e.stack || e) }); } });
 
-app.listen(PORT, () => console.log(`FastShare Stremio addon v${VERSION} on ${PORT}`));
+if (require.main === module) {
+  app.listen(PORT, () => console.log(`FastShare Stremio addon v${VERSION} on ${PORT}`));
+}
+
+module.exports = {
+  app,
+  normalize,
+  detectAudio,
+  getTitleAliases,
+  extractTmdbLocalizedAliases,
+  extractWikidataLocalizedAliases,
+  getLocalizedTitleData,
+  extractSequelNumber,
+  aliasMatchScore,
+  titleMatchScore,
+  scoreFile,
+  termsFor
+};

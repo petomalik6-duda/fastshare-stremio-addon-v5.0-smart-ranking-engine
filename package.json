@@ -1,13 +1,18 @@
 {
   "name": "fastshare-stremio-addon-v6-configurator",
-  "version": "6.0.0",
-  "description": "FastShare Stremio addon with configurator using FastShare Kodi API.",
+  "version": "6.3.0",
+  "description": "FastShare Stremio addon with automatic Czech/Slovak localized-title discovery and smart ranking.",
   "main": "server.js",
-  "scripts": { "start": "node server.js" },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.18.2",
     "node-fetch": "^2.7.0"
   },
-  "engines": { "node": "20.x" }
+  "engines": {
+    "node": "20.x"
+  }
 }
