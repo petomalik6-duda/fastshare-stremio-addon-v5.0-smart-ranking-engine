@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: fastshare-stremio-addon
+    runtime: node
+    plan: free
+    buildCommand: npm ci --omit=dev --no-audit --no-fund
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 20.19.4

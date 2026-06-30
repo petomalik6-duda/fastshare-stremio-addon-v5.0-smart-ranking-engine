@@ -1,0 +1,12 @@
+FastShare Stremio addon v6.3.1 – Render deployment fix
+
+Render settings:
+Build Command: npm ci --omit=dev --no-audit --no-fund
+Start Command: npm start
+Health Check Path: /health
+
+The package-lock.json now uses the public npm registry. A .npmrc file forces
+https://registry.npmjs.org/ and disables audit/funding network requests.
+
+After uploading to GitHub use Render:
+Manual Deploy -> Clear build cache & deploy

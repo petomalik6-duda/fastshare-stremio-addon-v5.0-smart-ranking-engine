@@ -10,7 +10,7 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
 const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
-const VERSION = '6.3.0';
+const VERSION = '6.3.1';
 const API = 'https://fastshare.cz/api/api_kodi.php';
 const MAX_STREAMS = Number(process.env.MAX_STREAMS || 60);
 const MAX_SEARCH_TERMS = Number(process.env.MAX_SEARCH_TERMS || 24);
@@ -235,7 +235,7 @@ function extractWikidataLocalizedAliases(payload) {
   return [...out.values()];
 }
 function tmdbRequestOptions() {
-  const headers = { Accept: 'application/json', 'User-Agent': 'FastShare-Stremio-Addon/6.3.0' };
+  const headers = { Accept: 'application/json', 'User-Agent': 'FastShare-Stremio-Addon/6.3.1' };
   if (TMDB_READ_ACCESS_TOKEN) headers.Authorization = `Bearer ${TMDB_READ_ACCESS_TOKEN}`;
   return { headers };
 }
@@ -271,7 +271,7 @@ async function fetchWikidataAliases(imdbId) {
   const url = new URL('https://query.wikidata.org/sparql');
   url.searchParams.set('query', query);
   url.searchParams.set('format', 'json');
-  const payload = await fetchJson(url.toString(), { headers: { Accept: 'application/sparql-results+json', 'User-Agent': 'FastShare-Stremio-Addon/6.3.0 (localized title lookup)' } });
+  const payload = await fetchJson(url.toString(), { headers: { Accept: 'application/sparql-results+json', 'User-Agent': 'FastShare-Stremio-Addon/6.3.1 (localized title lookup)' } });
   return { aliases: extractWikidataLocalizedAliases(payload), source: 'wikidata' };
 }
 async function getLocalizedTitleData(type, imdbId) {
@@ -638,7 +638,7 @@ async function getMeta(type, id) {
   const cinemetaPromise = (async () => {
     try {
       const url = `https://v3-cinemeta.strem.io/meta/${type}/${clean}.json`;
-      const json = await fetchJson(url, { headers: { 'User-Agent': 'FastShare-Stremio-Addon/6.3.0' } });
+      const json = await fetchJson(url, { headers: { 'User-Agent': 'FastShare-Stremio-Addon/6.3.1' } });
       return json.meta || {};
     } catch (error) {
       return { name: clean, metadataError: String(error.message || error) };
