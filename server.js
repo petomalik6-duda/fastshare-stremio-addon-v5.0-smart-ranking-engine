@@ -12,7 +12,7 @@ app.use('/badges', express.static(path.join(__dirname, 'public', 'badges'), { ma
 
 const PORT = process.env.PORT || 10000;
 const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
-const VERSION = '6.3.5';
+const VERSION = '6.3.6';
 const API = 'https://fastshare.cz/api/api_kodi.php';
 const MAX_STREAMS = Number(process.env.MAX_STREAMS || 60);
 const MAX_SEARCH_TERMS = Number(process.env.MAX_SEARCH_TERMS || 24);
@@ -25,7 +25,9 @@ const HTTP_TIMEOUT_MS = Number(process.env.HTTP_TIMEOUT_MS || 9000);
 const TMDB_API_KEY = String(process.env.TMDB_API_KEY || '').trim();
 const TMDB_READ_ACCESS_TOKEN = String(process.env.TMDB_READ_ACCESS_TOKEN || process.env.TMDB_ACCESS_TOKEN || process.env.TMDB_BEARER_TOKEN || process.env.TMDB_TOKEN || '').trim();
 const ENABLE_WIKIDATA_ALIASES = String(process.env.ENABLE_WIKIDATA_ALIASES || '1') !== '0';
-const NUVIO_BASE_BADGES_URL = String(process.env.NUVIO_BASE_BADGES_URL || 'https://gist.githubusercontent.com/saif1233/a2b9817bb8a632ae93a6076c1e1459af/raw/f61d444e1cc03e017ba9327a557b4be516e3a340/Nuvio.json').trim();
+const NARD_BADGES_URL = 'https://raw.githubusercontent.com/vowl313/NardBadges/refs/heads/main/NardBadges.json';
+const LEGACY_NUVIO_BADGES_URL = 'https://gist.githubusercontent.com/saif1233/a2b9817bb8a632ae93a6076c1e1459af/raw/f61d444e1cc03e017ba9327a557b4be516e3a340/Nuvio.json';
+const NUVIO_BASE_BADGES_URL = String(process.env.NUVIO_BASE_BADGES_URL || NARD_BADGES_URL).trim();
 const NUVIO_BADGES_CACHE_TTL_MS = Number(process.env.NUVIO_BADGES_CACHE_TTL_MS || 1000 * 60 * 60 * 12);
 let nuvioBaseBadgesCache = null;
 
@@ -881,7 +883,17 @@ function publicBaseUrl(req) {
   if (host) return `${protocol}://${host}`;
   return String(process.env.BASE_URL || `http://localhost:${PORT}`).trim().replace(/\/$/, '');
 }
-function nuvioBadgeFilter(baseUrl, { id, name, pattern, image, groupId = 'fastshare-extra', tagColor = '#253047', textColor = '#FFFFFF', borderColor = '#718096' }) {
+function nuvioBadgeFilter(baseUrl, {
+  id,
+  name,
+  pattern,
+  image,
+  groupId = 'fastshare-extra',
+  tagColor = '#00000000',
+  textColor = '#FFFFFF',
+  borderColor = '#FFFFFFFF',
+  tagStyle = 'filled and bordered'
+}) {
   return {
     borderColor,
     groupId,
@@ -891,49 +903,87 @@ function nuvioBadgeFilter(baseUrl, { id, name, pattern, image, groupId = 'fastsh
     name,
     pattern,
     tagColor,
-    tagStyle: 'filled and bordered',
+    tagStyle,
     textColor,
     type: 'filter'
   };
 }
+
+// NardBadges already supplies resolution, source, HDR, codec, audio, channel and
+// language artwork. These local filters only fill gaps that are specific to this
+// addon while using the same transparent, white outlined visual language.
 function buildExtraNuvioFilters(baseUrl) {
-  const f = (data) => nuvioBadgeFilter(baseUrl, data);
+  const f = data => nuvioBadgeFilter(baseUrl, data);
   return [
-    f({ id: 'fs-recommended', name: 'Odporúčané', pattern: '(?i)\\bOdporúčané\\b', image: 'recommended.png', groupId: 'fs-status', tagColor: '#FFF2B2', textColor: '#181818', borderColor: '#FFD54F' }),
-    f({ id: 'fs-lang-cz', name: 'CZ audio', pattern: '(?i)\\bCZ(?:\\s+AUDIO)?\\b(?!\\s+SUBS)', image: 'cz.png', groupId: 'fs-language', tagColor: '#EAF5FF', textColor: '#111111', borderColor: '#D7141A' }),
-    f({ id: 'fs-lang-sk', name: 'SK audio', pattern: '(?i)\\bSK(?:\\s+AUDIO)?\\b(?!\\s+SUBS)', image: 'sk.png', groupId: 'fs-language', tagColor: '#EAF5FF', textColor: '#111111', borderColor: '#0B4EA2' }),
-    f({ id: 'fs-lang-en', name: 'EN audio', pattern: '(?i)\\bEN(?:\\s+AUDIO)?\\b', image: 'en.png', groupId: 'fs-language', tagColor: '#EAF5FF', textColor: '#111111', borderColor: '#C8102E' }),
-    f({ id: 'fs-lang-multi', name: 'MULTI audio', pattern: '(?i)\\bMULTI(?:\\s+AUDIO)?\\b', image: 'multi.png', groupId: 'fs-language', tagColor: '#E9FFF5', textColor: '#111111', borderColor: '#2F855A' }),
-    f({ id: 'fs-dabing', name: 'Dabing', pattern: '(?i)\\bDABING\\b', image: 'dabing.png', groupId: 'fs-language', tagColor: '#FFF4E5', textColor: '#111111', borderColor: '#DD6B20' }),
-    f({ id: 'fs-subs-cz', name: 'CZ titulky', pattern: '(?i)\\bCZ\\s+SUBS\\b', image: 'cz-subs.png', groupId: 'fs-subs', tagColor: '#F7FAFC', textColor: '#111111', borderColor: '#D7141A' }),
-    f({ id: 'fs-subs-sk', name: 'SK titulky', pattern: '(?i)\\bSK\\s+SUBS\\b', image: 'sk-subs.png', groupId: 'fs-subs', tagColor: '#F7FAFC', textColor: '#111111', borderColor: '#0B4EA2' }),
-    f({ id: 'fs-codec-av1', name: 'AV1', pattern: '(?i)\\bAV1\\b', image: 'av1.png', groupId: 'fs-codec' }),
-    f({ id: 'fs-codec-hevc', name: 'HEVC', pattern: '(?i)\\bHEVC\\b', image: 'hevc.png', groupId: 'fs-codec' }),
-    f({ id: 'fs-codec-avc', name: 'AVC', pattern: '(?i)\\bAVC\\b', image: 'avc.png', groupId: 'fs-codec' }),
-    f({ id: 'fs-audio-aac', name: 'AAC', pattern: '(?i)\\bAAC\\b', image: 'aac.png', groupId: 'fs-audio' }),
-    f({ id: 'fs-10bit', name: '10-bit', pattern: '(?i)\\b10bit\\b', image: '10bit.png', groupId: 'fs-video' }),
-    f({ id: 'fs-hybrid', name: 'Hybrid', pattern: '(?i)\\bHYBRID\\b', image: 'hybrid.png', groupId: 'fs-video' }),
-    f({ id: 'fs-source-hdtv', name: 'HDTV', pattern: '(?i)\\bHDTV\\b', image: 'hdtv.png', groupId: 'fs-source' }),
-    f({ id: 'fs-res-480', name: '480p', pattern: '(?i)\\b480p\\b', image: '480p.png', groupId: 'fs-resolution' }),
-    f({ id: 'fs-container-mkv', name: 'MKV', pattern: '(?i)\\bMKV\\b', image: 'mkv.png', groupId: 'fs-container', tagColor: '#EDF2F7', textColor: '#111111' }),
-    f({ id: 'fs-container-mp4', name: 'MP4', pattern: '(?i)\\bMP4\\b', image: 'mp4.png', groupId: 'fs-container', tagColor: '#EDF2F7', textColor: '#111111' })
+    f({ id: 'fs-nard-recommended', name: 'Odporúčané', pattern: '(?i)\\bOdporúčané\\b', image: 'nard-rec.png', groupId: 'fs-status', borderColor: '#FFFFC107' }),
+    f({ id: 'fs-nard-dabing', name: 'Dabing', pattern: '(?i)\\bDABING\\b', image: 'nard-dub.png', groupId: 'fs-language' }),
+    f({ id: 'fs-nard-subs-cz', name: 'CZ titulky', pattern: '(?i)\\bCZ\\s+SUBS\\b', image: 'nard-czs.png', groupId: 'fs-subs' }),
+    f({ id: 'fs-nard-subs-sk', name: 'SK titulky', pattern: '(?i)\\bSK\\s+SUBS\\b', image: 'nard-sks.png', groupId: 'fs-subs' }),
+    f({ id: 'fs-nard-res-480', name: '480p', pattern: '(?i)\\b480p\\b', image: 'nard-480p.png', groupId: 'gr', borderColor: '#FF858283' }),
+    f({ id: 'fs-nard-container-mkv', name: 'MKV', pattern: '(?i)\\bMKV\\b', image: 'nard-mkv.png', groupId: 'fs-container' }),
+    f({ id: 'fs-nard-container-mp4', name: 'MP4', pattern: '(?i)\\bMP4\\b', image: 'nard-mp4.png', groupId: 'fs-container' })
   ];
 }
+
+function adaptNardBadgeFilters(filters) {
+  const languagePatterns = new Map([
+    ['f1', '(?i)\\b(?:CZ|CZE|CES|CESKY|CESTINA|CZECH)(?:\\s+AUDIO)?\\b(?!\\s+SUBS)'],
+    ['f2', '(?i)\\b(?:SK|SVK|SLOVAK|SLOVENCINA|SLOVENSKY)(?:\\s+AUDIO)?\\b(?!\\s+SUBS)'],
+    ['l-en', '(?i)\\b(?:EN|ENG|ENGLISH)(?:\\s+AUDIO)?\\b(?!\\s+SUBS)'],
+    ['l-mu', '(?i)\\b(?:MULTI|MUL)(?:\\s+AUDIO)?\\b(?!\\s+SUBS)']
+  ]);
+  const languageNames = new Map([
+    ['CZE', languagePatterns.get('f1')],
+    ['SVK', languagePatterns.get('f2')],
+    ['ENG', languagePatterns.get('l-en')],
+    ['MUL', languagePatterns.get('l-mu')]
+  ]);
+  return (filters || []).map(item => {
+    if (!item || typeof item !== 'object') return item;
+    const id = String(item.id || '').toLowerCase();
+    const name = String(item.name || '').toUpperCase();
+    const pattern = languagePatterns.get(id) || languageNames.get(name);
+    if (!pattern) return item;
+    return { ...item, pattern };
+  });
+}
+
+async function fetchNuvioPreset(url) {
+  const value = await fetchJson(url, { headers: { 'User-Agent': `FastShare-Stremio/${VERSION}` } }, Math.min(HTTP_TIMEOUT_MS, 7000));
+  if (!value || !Array.isArray(value.filters)) throw new Error('Invalid Nuvio badge preset');
+  return { ...value, filters: adaptNardBadgeFilters(value.filters) };
+}
+
 async function getBaseNuvioBadgePreset() {
   if (nuvioBaseBadgesCache && Date.now() < nuvioBaseBadgesCache.expiresAt) return nuvioBaseBadgesCache.value;
-  const value = await fetchJson(NUVIO_BASE_BADGES_URL, { headers: { 'User-Agent': `FastShare-Stremio/${VERSION}` } }, Math.min(HTTP_TIMEOUT_MS, 7000));
-  if (!value || !Array.isArray(value.filters)) throw new Error('Invalid Nuvio badge preset');
-  nuvioBaseBadgesCache = { value, expiresAt: Date.now() + NUVIO_BADGES_CACHE_TTL_MS };
-  return value;
+  const urls = [NUVIO_BASE_BADGES_URL];
+  if (NUVIO_BASE_BADGES_URL !== LEGACY_NUVIO_BADGES_URL) urls.push(LEGACY_NUVIO_BADGES_URL);
+  let lastError;
+  for (const url of urls) {
+    try {
+      const value = await fetchNuvioPreset(url);
+      const source = url === NARD_BADGES_URL ? 'nard' : (url === LEGACY_NUVIO_BADGES_URL ? 'legacy' : 'custom');
+      const cached = { ...value, fastsharePresetSource: source };
+      nuvioBaseBadgesCache = { value: cached, expiresAt: Date.now() + NUVIO_BADGES_CACHE_TTL_MS };
+      return cached;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error('Unable to load Nuvio badge preset');
 }
+
 function mergeNuvioBadgeFilters(baseFilters, extraFilters) {
   const out = [];
-  const seen = new Set();
+  const seenIds = new Set();
+  const seenNames = new Set();
   for (const item of [...(baseFilters || []), ...(extraFilters || [])]) {
     if (!item || typeof item !== 'object') continue;
-    const key = String(item.id || item.name || '').toLowerCase();
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
+    const id = String(item.id || '').toLowerCase();
+    const name = String(item.name || '').toLowerCase();
+    if ((id && seenIds.has(id)) || (name && seenNames.has(name))) continue;
+    if (id) seenIds.add(id);
+    if (name) seenNames.add(name);
     out.push(item);
   }
   return out;
@@ -980,24 +1030,31 @@ async function buildStreamResponse(req, debug = false) {
 }
 
 app.get('/', (req, res) => res.redirect('/configure'));
-app.get('/health', (req, res) => res.json({ ok: true, version: VERSION }));
+app.get('/health', (req, res) => res.json({ ok: true, version: VERSION, badgeDesign: 'NardBadges' }));
 app.get('/nuvio-badges-extra.json', (req, res) => {
+  res.set('X-Nuvio-Badge-Design', 'NardBadges-compatible');
   res.set('Cache-Control', 'public, max-age=3600');
   res.json({ filters: buildExtraNuvioFilters(publicBaseUrl(req)) });
 });
-app.get('/nuvio-badges.json', async (req, res) => {
+async function sendNardBadgePreset(req, res) {
   const extra = buildExtraNuvioFilters(publicBaseUrl(req));
   try {
     const base = await getBaseNuvioBadgePreset();
+    res.set('X-Nuvio-Base-Preset', base.fastsharePresetSource || 'nard');
+    res.set('X-Nuvio-Badge-Design', 'NardBadges');
     res.set('Cache-Control', 'public, max-age=3600');
-    res.json({ ...base, filters: mergeNuvioBadgeFilters(base.filters, extra) });
+    const { fastsharePresetSource, ...payload } = base;
+    res.json({ ...payload, filters: mergeNuvioBadgeFilters(base.filters, extra) });
   } catch (error) {
-    // The extended filters remain usable even if the external base preset is temporarily unavailable.
-    res.set('X-Nuvio-Base-Preset', 'fallback');
+    // Addon-specific Nard-style badges remain usable even during an upstream outage.
+    res.set('X-Nuvio-Base-Preset', 'local-fallback');
+    res.set('X-Nuvio-Badge-Design', 'NardBadges-compatible');
     res.set('Cache-Control', 'public, max-age=300');
     res.json({ filters: extra });
   }
-});
+}
+app.get('/nuvio-badges.json', sendNardBadgePreset);
+app.get('/nuvio-nard-badges.json', sendNardBadgePreset);
 app.get('/manifest.json', (req, res) => res.json(manifest(null)));
 app.get('/:config/manifest.json', (req, res) => res.json(manifest(req.params.config)));
 
@@ -1096,6 +1153,8 @@ module.exports = {
   termsFor,
   detectBadgeTags,
   buildExtraNuvioFilters,
+  adaptNardBadgeFilters,
   mergeNuvioBadgeFilters,
+  NARD_BADGES_URL,
   streamObj
 };

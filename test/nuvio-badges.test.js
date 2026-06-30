@@ -1,27 +1,30 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { detectAudio, detectBadgeTags, streamObj } = require('../server');
+const {
+  detectAudio,
+  detectBadgeTags,
+  streamObj,
+  buildExtraNuvioFilters,
+  adaptNardBadgeFilters,
+  mergeNuvioBadgeFilters,
+  NARD_BADGES_URL
+} = require('../server');
 
-test('normalizes common BetterFormatter/Nuvio badge tokens', () => {
+test('normalizes common Nuvio/Nard badge tokens', () => {
   const name = 'Film.2026.2160p.WEB-DL.DV.HDR10Plus.HEVC.Atmos.DDP5.1.CZ.Dabing.mkv';
   const file = { name, size: 8 * 1024 ** 3, quality: '4K', audio: detectAudio(name), ext: 'MKV', durationText: '2:00:00' };
   const tags = detectBadgeTags(name, file);
-  for (const expected of ['WEB-DL','2160p','DV','HDR10+','HEVC','Atmos','DD+','5.1','CZ']) {
+  for (const expected of ['WEB-DL','2160p','DV','HDR10+','HEVC','Atmos','DD+','5.1','CZ','CZ AUDIO','DABING','MKV']) {
     assert.ok(tags.includes(expected), `missing ${expected}: ${tags.join(', ')}`);
   }
 });
 
-test('recommended stream keeps badge tokens on the first line', () => {
+test('recommended stream keeps all badge tokens on the first line', () => {
   const name = 'Film.2026.1080p.BluRay.DTS-HD.MA.5.1.SK.Dabing.mkv';
   const file = { name, size: 5 * 1024 ** 3, quality: '1080p', audio: detectAudio(name), ext: 'MKV', durationText: '1:40:00', url: 'https://example.invalid/video.mkv' };
   const stream = streamObj(file, 'hash', true);
   const firstLine = stream.title.split('\n')[0];
-  assert.match(firstLine, /Odporúčané/);
-  assert.match(firstLine, /BluRay/);
-  assert.match(firstLine, /1080p/);
-  assert.match(firstLine, /DTS-HD MA/);
-  assert.match(firstLine, /5\.1/);
-  assert.match(firstLine, /SK/);
+  for (const expected of [/Odporúčané/, /BluRay/, /1080p/, /DTS-HD MA/, /5\.1/, /SK/, /DABING/, /MKV/]) assert.match(firstLine, expected);
   assert.equal(stream.behaviorHints.filename, name);
   assert.equal(stream.behaviorHints.videoSize, file.size);
 });
@@ -29,42 +32,56 @@ test('recommended stream keeps badge tokens on the first line', () => {
 test('does not invent HDR or audio codec badges', () => {
   const name = 'Film.2026.720p.CZ.Dabing.mp4';
   const file = { name, quality: '720p', audio: detectAudio(name), ext: 'MP4', size: 1 };
+  assert.deepEqual(detectBadgeTags(name, file), ['720p', 'CZ', 'CZ AUDIO', 'DABING', 'MP4']);
+});
+
+test('subtitle-only files do not create an audio language badge', () => {
+  const name = 'Film.2026.720p.WEBRip.CZ.titulky.mp4';
+  const file = { name, quality: '720p', audio: detectAudio(name), ext: 'MP4' };
   const tags = detectBadgeTags(name, file);
-  assert.deepEqual(tags, ['720p', 'CZ', 'CZ AUDIO', 'DABING', 'MP4']);
+  assert.ok(tags.includes('CZ SUBS'));
+  assert.ok(tags.includes('MP4'));
+  assert.ok(!tags.includes('CZ AUDIO'));
 });
 
-test('adds explicit audio, dubbing, subtitle and container tokens', () => {
-  const dubbed = 'Film.2026.1080p.WEB-DL.x265.CZ.Dabing.DDP5.1.10bit.mkv';
-  const dubbedFile = { name: dubbed, quality: '1080p', audio: detectAudio(dubbed), ext: 'MKV' };
-  const dubbedTags = detectBadgeTags(dubbed, dubbedFile);
-  for (const expected of ['CZ', 'CZ AUDIO', 'DABING', 'HEVC', 'DD+', '5.1', '10bit', 'MKV']) {
-    assert.ok(dubbedTags.includes(expected), `missing ${expected}: ${dubbedTags.join(', ')}`);
-  }
-
-  const subtitled = 'Film.2026.720p.WEBRip.CZ.titulky.mp4';
-  const subtitleFile = { name: subtitled, quality: '720p', audio: detectAudio(subtitled), ext: 'MP4' };
-  const subtitleTags = detectBadgeTags(subtitled, subtitleFile);
-  assert.ok(subtitleTags.includes('CZ SUBS'));
-  assert.ok(subtitleTags.includes('MP4'));
-  assert.ok(!subtitleTags.includes('CZ AUDIO'));
+test('uses NardBadges as the default upstream design', () => {
+  assert.equal(NARD_BADGES_URL, 'https://raw.githubusercontent.com/vowl313/NardBadges/refs/heads/main/NardBadges.json');
 });
 
-test('extended Nuvio preset includes languages, subtitles, codecs and absolute images', () => {
-  const { buildExtraNuvioFilters } = require('../server');
+test('adapts Nard language filters to addon CZ/SK/EN/MULTI tokens', () => {
+  const input = [
+    { id: 'f1', name: 'CZE', pattern: 'old-cz' },
+    { id: 'f2', name: 'SVK', pattern: 'old-sk' },
+    { id: 'l-en', name: 'ENG', pattern: 'old-en' },
+    { id: 'l-mu', name: 'MUL', pattern: 'old-multi' },
+    { id: 'r-4k', name: '4K', pattern: 'keep-me' }
+  ];
+  const out = adaptNardBadgeFilters(input);
+  assert.match(out[0].pattern, /CZ\|CZE/);
+  assert.match(out[1].pattern, /SK\|SVK/);
+  assert.match(out[2].pattern, /EN\|ENG/);
+  assert.match(out[3].pattern, /MULTI\|MUL/);
+  assert.equal(out[4].pattern, 'keep-me');
+});
+
+test('local gap filters use transparent Nard-style badges', () => {
   const filters = buildExtraNuvioFilters('https://addon.example');
   const ids = new Set(filters.map(x => x.id));
-  for (const id of ['fs-lang-cz','fs-lang-sk','fs-lang-en','fs-lang-multi','fs-subs-cz','fs-subs-sk','fs-codec-hevc','fs-codec-av1','fs-audio-aac','fs-container-mkv']) {
+  for (const id of ['fs-nard-recommended','fs-nard-dabing','fs-nard-subs-cz','fs-nard-subs-sk','fs-nard-res-480','fs-nard-container-mkv','fs-nard-container-mp4']) {
     assert.ok(ids.has(id), `missing filter ${id}`);
   }
-  assert.ok(filters.every(x => x.imageURL.startsWith('https://addon.example/badges/')));
+  assert.ok(filters.every(x => x.imageURL.startsWith('https://addon.example/badges/nard-')));
+  assert.ok(filters.every(x => x.tagColor === '#00000000'));
+  assert.ok(filters.every(x => x.textColor === '#FFFFFF'));
+  assert.ok(filters.every(x => x.tagStyle === 'filled and bordered'));
 });
 
-test('merged badge preset preserves base filters and appends addon filters once', () => {
-  const { buildExtraNuvioFilters, mergeNuvioBadgeFilters } = require('../server');
+test('merged badge preset preserves base filters and de-duplicates ids and names', () => {
   const base = [{ id: 'q-r', name: 'Remux' }, { id: 'q-w', name: 'WebDL' }];
   const extra = buildExtraNuvioFilters('https://addon.example');
-  const merged = mergeNuvioBadgeFilters(base, extra.concat(extra[0]));
+  const duplicateName = { id: 'other-webdl', name: 'WebDL' };
+  const merged = mergeNuvioBadgeFilters(base, [duplicateName, ...extra, extra[0]]);
   assert.deepEqual(merged.slice(0, 2), base);
-  assert.equal(merged.filter(x => x.id === 'fs-recommended').length, 1);
-  assert.ok(merged.some(x => x.id === 'fs-lang-cz'));
+  assert.equal(merged.filter(x => x.id === 'fs-nard-recommended').length, 1);
+  assert.equal(merged.filter(x => x.name === 'WebDL').length, 1);
 });

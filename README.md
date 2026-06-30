@@ -119,37 +119,32 @@ npm test
 npm start
 ```
 
-## Kompletné Nuvio badges (v6.3.5)
+## Nuvio badges – NardBadges dizajn (v6.3.6)
 
-Pôvodný farebný preset neobsahuje filtre pre jazyky. Táto verzia preto poskytuje vlastný zlúčený endpoint:
+Hlavný endpoint používa vizuálny štýl projektu NardBadges a dopĺňa filtre špecifické pre addon:
 
 ```txt
 https://tvoja-sluzba.onrender.com/nuvio-badges.json
 ```
 
-Tento URL vlož v Nuvio namiesto pôvodného Gist URL. Endpoint načíta pôvodný farebný preset a doplní:
+Rovnaký preset je dostupný aj na:
 
-- CZ, SK, EN a MULTI audio,
-- samostatný badge pre dabing,
-- CZ a SK titulky,
-- AV1, HEVC, AVC a AAC,
-- 10-bit a Hybrid,
-- HDTV a 480p,
-- MKV a MP4,
-- badge Odporúčané.
+```txt
+https://tvoja-sluzba.onrender.com/nuvio-nard-badges.json
+```
 
-Samostatné doplnkové filtre bez pôvodného farebného presetu sú na:
+NardBadges dodáva ikony pre rozlíšenie, zdroj, HDR/Dolby Vision, kodeky, audio, kanály a jazyky. Addon upravuje filtre CZE/SVK/ENG/MUL tak, aby rozpoznali aj jeho tokeny `CZ`, `SK`, `EN` a `MULTI`. Doplnkové badge `DUB`, `CZS`, `SKS`, `REC`, `480P`, `MKV` a `MP4` majú rovnaký transparentný biely obrysový štýl.
+
+Samostatné lokálne doplnky bez upstream presetu sú na:
 
 ```txt
 https://tvoja-sluzba.onrender.com/nuvio-badges-extra.json
 ```
 
-Obrázky badge servuje priamo addon cez `/badges/`. Prvý riadok `stream.title` obsahuje všetky normalizované tokeny, aby fungovali aj regexy ukotvené na začiatok textu.
-
-Voliteľne možno zmeniť zdroj pôvodného presetu:
+Voliteľne možno zmeniť upstream zdroj:
 
 ```txt
 NUVIO_BASE_BADGES_URL=https://.../iny-preset.json
 ```
 
-Po zmene URL v Nuvio urob úplný reštart aplikácie alebo vymaž cache badge konfigurácie.
+Po zmene URL v Nuvio aplikáciu úplne reštartuj alebo vymaž cache badge konfigurácie.

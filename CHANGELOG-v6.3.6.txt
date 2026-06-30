@@ -1,0 +1,8 @@
+FastShare addon v6.3.6
+
+- Nuvio badge preset teraz používa NardBadges ako hlavný dizajn.
+- Zachovaná pôvodná URL /nuvio-badges.json; pridaný alias /nuvio-nard-badges.json.
+- CZE/SVK/ENG/MUL filtre rozpoznávajú CZ/SK/EN/MULTI tokeny addonu.
+- Doplnkové DUB/CZS/SKS/REC/480P/MKV/MP4 ikony majú transparentný Nard štýl.
+- Pri výpadku NardBadges sa skúsi pôvodný farebný preset a potom lokálny fallback.
+- Vyhľadávanie, ranking, CZ/SK názvy a všetky predchádzajúce opravy ostali nezmenené.

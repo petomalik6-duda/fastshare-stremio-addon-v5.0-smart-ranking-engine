@@ -1,14 +1,12 @@
-NUVIO BADGES – v6.3.5
+Nuvio badge URL – NardBadges dizajn
 
-V Nuvio otvor nastavenie Custom/Fusion Badges alebo Badge URLs.
-
-Použi URL svojho addonu:
+Po nasadení vlož v Nuvio:
 https://TVOJA-RENDER-ADRESA.onrender.com/nuvio-badges.json
 
-Nepoužívaj už iba pôvodný Gist URL, pretože neobsahuje jazykové filtre.
-Nový endpoint zlúči pôvodné farebné badge s doplnkami pre CZ, SK, EN, MULTI, dabing, titulky, kodeky, 10-bit, kontajner a ďalšie značky.
+Rovnaký preset je aj na:
+https://TVOJA-RENDER-ADRESA.onrender.com/nuvio-nard-badges.json
 
-Doplnkové badge bez pôvodného presetu:
+Doplnkové lokálne filtre bez upstream presetu:
 https://TVOJA-RENDER-ADRESA.onrender.com/nuvio-badges-extra.json
 
-Po uložení reštartuj Nuvio.
+Po zmene URL úplne reštartuj Nuvio alebo vymaž cache badge konfigurácie.
