@@ -1,4 +1,4 @@
-# FastShare Stremio Addon v6.3.0
+# FastShare Stremio Addon v6.3.2
 
 Táto verzia všeobecne dopĺňa české a slovenské názvy pre filmy aj seriály podľa IMDb ID. Už nie je odkázaná iba na ručne zapísaný alias jedného filmu.
 
@@ -73,7 +73,7 @@ ENABLE_WIKIDATA_ALIASES=1
 1. Nahraj celý obsah balíka do GitHub repozitára.
 2. V Renderi doplň TMDB token alebo API kľúč.
 3. Spusti **Manual Deploy → Clear build cache & deploy**.
-4. Otvor `/health`; musí vrátiť `"version":"6.3.0"`.
+4. Otvor `/health`; musí vrátiť `"version":"6.3.2"`.
 5. Odstráň starú inštaláciu addonu zo Stremia a znova ho nainštaluj cez `/configure`.
 
 ## Kontrola názvov

@@ -172,3 +172,50 @@ test('series search keeps exact localized episode terms before broad variants', 
   assert.ok(terms.includes('hra o trony s01e02'));
   assert.ok(terms.includes('game of thrones s01e02'));
 });
+
+test('rejects Lonely Tunes when the requested one-word movie is Tuner', () => {
+  const tunerMeta = {
+    type: 'movie',
+    imdbId: 'tt0000001',
+    title: 'Tuner',
+    year: '2025',
+    raw: { name: 'Tuner' },
+    localizedAliases: []
+  };
+  const wrong = scoreFile({
+    name: 'Lonely.Tunes.2025.CZ.Dabing.2160p.mkv',
+    size: 12 * 1024 ** 3
+  }, tunerMeta, 'movie');
+  assert.equal(wrong, null);
+});
+
+test('keeps an exact one-word title match for Tuner', () => {
+  const tunerMeta = {
+    type: 'movie',
+    imdbId: 'tt0000001',
+    title: 'Tuner',
+    year: '2025',
+    raw: { name: 'Tuner' },
+    localizedAliases: []
+  };
+  const correct = scoreFile({
+    name: 'Tuner.2025.CZ.Dabing.1080p.mkv',
+    size: 5 * 1024 ** 3
+  }, tunerMeta, 'movie');
+  assert.ok(correct);
+  assert.ok(correct.score > 200, `score was ${correct.score}`);
+});
+
+test('does not generate a broad four-letter stem for a one-word movie title', () => {
+  const tunerMeta = {
+    type: 'movie',
+    imdbId: 'tt0000001',
+    title: 'Tuner',
+    year: '2025',
+    raw: { name: 'Tuner' },
+    localizedAliases: []
+  };
+  const terms = termsFor(tunerMeta).map(x => x.toLowerCase());
+  assert.ok(terms.includes('tuner'));
+  assert.equal(terms.includes('tune'), false);
+});

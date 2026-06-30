@@ -10,7 +10,7 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
 const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
-const VERSION = '6.3.1';
+const VERSION = '6.3.2';
 const API = 'https://fastshare.cz/api/api_kodi.php';
 const MAX_STREAMS = Number(process.env.MAX_STREAMS || 60);
 const MAX_SEARCH_TERMS = Number(process.env.MAX_SEARCH_TERMS || 24);
@@ -235,7 +235,7 @@ function extractWikidataLocalizedAliases(payload) {
   return [...out.values()];
 }
 function tmdbRequestOptions() {
-  const headers = { Accept: 'application/json', 'User-Agent': 'FastShare-Stremio-Addon/6.3.1' };
+  const headers = { Accept: 'application/json', 'User-Agent': 'FastShare-Stremio-Addon/6.3.2' };
   if (TMDB_READ_ACCESS_TOKEN) headers.Authorization = `Bearer ${TMDB_READ_ACCESS_TOKEN}`;
   return { headers };
 }
@@ -271,7 +271,7 @@ async function fetchWikidataAliases(imdbId) {
   const url = new URL('https://query.wikidata.org/sparql');
   url.searchParams.set('query', query);
   url.searchParams.set('format', 'json');
-  const payload = await fetchJson(url.toString(), { headers: { Accept: 'application/sparql-results+json', 'User-Agent': 'FastShare-Stremio-Addon/6.3.1 (localized title lookup)' } });
+  const payload = await fetchJson(url.toString(), { headers: { Accept: 'application/sparql-results+json', 'User-Agent': 'FastShare-Stremio-Addon/6.3.2 (localized title lookup)' } });
   return { aliases: extractWikidataLocalizedAliases(payload), source: 'wikidata' };
 }
 async function getLocalizedTitleData(type, imdbId) {
@@ -450,16 +450,25 @@ function sequelMismatch(name, meta, aliases = getTitleAliases(meta)) {
 function aliasMatchScore(fileName, alias) {
   const file = normalize(fileName);
   const title = normalize(alias);
-  if (!title) return { score: -80, strong: false, ratio: 0, matched: 0, total: 0 };
+  if (!title) return { score: -80, strong: false, ratio: 0, matched: 0, total: 0, strictShortTitle: false };
 
   const stop = new Set(['the','a','an','and','or','of','to','in','on','at','with','for','from']);
   const titleTokens = title.split(' ').filter(x => (x.length > 1 || /^\d+$/.test(x)) && !stop.has(x));
+  const lexicalTokens = titleTokens.filter(x => !/^\d+$/.test(x));
+  const strictShortTitle = lexicalTokens.length === 1;
   const fileTokens = file.split(' ').filter(Boolean);
   const used = new Set();
   let matched = 0;
 
   for (const expected of titleTokens) {
-    const index = fileTokens.findIndex((actual, i) => !used.has(i) && fuzzyTokenMatch(expected, actual));
+    const isNumber = /^\d+$/.test(expected);
+    const index = fileTokens.findIndex((actual, i) => {
+      if (used.has(i)) return false;
+      // One-word movie names are highly ambiguous. A one-character fuzzy match
+      // such as Tuner -> Tunes must never count as the requested title.
+      if (strictShortTitle || isNumber) return expected === actual;
+      return fuzzyTokenMatch(expected, actual);
+    });
     if (index >= 0) {
       used.add(index);
       matched++;
@@ -468,7 +477,9 @@ function aliasMatchScore(fileName, alias) {
 
   const total = titleTokens.length;
   const ratio = total ? matched / total : 0;
-  const exactPhrase = title.length >= 4 && file.includes(title);
+  const exactPhrase = strictShortTitle
+    ? total > 0 && matched === total
+    : title.length >= 4 && file.includes(title);
   let score = -80;
   if (exactPhrase) score = 130;
   else if (total && matched === total) score = 110;
@@ -476,7 +487,7 @@ function aliasMatchScore(fileName, alias) {
   else if (matched >= 2) score = 45;
   else if (matched === 1) score = 15;
 
-  return { score, strong: exactPhrase || matched === total || ratio >= 0.67 || matched >= 2, ratio, matched, total };
+  return { score, strong: exactPhrase || matched === total || ratio >= 0.67 || matched >= 2, ratio, matched, total, strictShortTitle };
 }
 function titleMatchScore(fileName, meta, type) {
   const aliases = getTitleAliases(meta);
@@ -495,6 +506,14 @@ function titleMatchScore(fileName, meta, type) {
 
   const candidates = aliases.map(alias => ({ alias, ...aliasMatchScore(fileName, alias) }));
   const best = candidates.sort((a, b) => b.score - a.score || b.ratio - a.ratio)[0] || { alias: meta.title || '', score: -80, strong: false, matched: 0, total: 0 };
+
+  // A movie result must have a meaningful title match. Previously a completely
+  // unrelated filename could survive only because CZ audio and high quality
+  // added enough points. Series retain their episode-pattern fallback below.
+  if (type === 'movie' && !best.strong) {
+    return { reject: true, score: -999, reasons: ['weak-title-match reject'] };
+  }
+
   const strongTitle = best.strong;
   score += best.score;
   if (best.score >= 110) reasons.push(`title-alias-exact +${best.score} (${best.alias})`);
@@ -638,7 +657,7 @@ async function getMeta(type, id) {
   const cinemetaPromise = (async () => {
     try {
       const url = `https://v3-cinemeta.strem.io/meta/${type}/${clean}.json`;
-      const json = await fetchJson(url, { headers: { 'User-Agent': 'FastShare-Stremio-Addon/6.3.1' } });
+      const json = await fetchJson(url, { headers: { 'User-Agent': 'FastShare-Stremio-Addon/6.3.2' } });
       return json.meta || {};
     } catch (error) {
       return { name: clean, metadataError: String(error.message || error) };
@@ -684,7 +703,9 @@ function movieTermsFor(meta) {
     const last = words[words.length - 1];
     if (last) {
       distinctive.push(sequel ? `${last} ${sequel}` : last);
-      if (last.length >= 5) stems.push(sequel ? `${last.slice(0, 4)} ${sequel}` : last.slice(0, 4));
+      // Do not search by a four-letter stem for a one-word title. For Tuner,
+      // the broad term "tune" returns unrelated files such as Lonely Tunes.
+      if (last.length >= 5 && words.length >= 2) stems.push(sequel ? `${last.slice(0, 4)} ${sequel}` : last.slice(0, 4));
     }
   }
 
