@@ -1,0 +1,8 @@
+FastShare Stremio addon v6.3.7
+
+- Fixes false CZ/SK/EN audio badges caused by a bare language token in a filename.
+- A language badge is now emitted only for explicit audio/dubbing markers or when the language is adjacent to an audio codec/channel layout.
+- Examples accepted as verified audio: CZ dabing, CZ audio, CZ AC3 5.1, DTS CZ.
+- Example kept unverified: Citizen.Vigilante.2025.CZ.1080p.WEB-DL.mkv.
+- Nard language filters now require the normalized "CZ AUDIO", "SK AUDIO", "EN AUDIO" or "MULTI AUDIO" token, so a bare token on the filename line cannot trigger a badge.
+- Existing localized search, ranking, Render, Tuner, concert and badge design fixes are preserved.

@@ -12,7 +12,7 @@ app.use('/badges', express.static(path.join(__dirname, 'public', 'badges'), { ma
 
 const PORT = process.env.PORT || 10000;
 const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
-const VERSION = '6.3.6';
+const VERSION = '6.3.7';
 const API = 'https://fastshare.cz/api/api_kodi.php';
 const MAX_STREAMS = Number(process.env.MAX_STREAMS || 60);
 const MAX_SEARCH_TERMS = Number(process.env.MAX_SEARCH_TERMS || 24);
@@ -358,10 +358,9 @@ function detectQuality(name) {
 }
 function detectAudio(name) {
   const n = normalize(name);
-  const raw = String(name || '').toLowerCase();
 
-  // Subtitles must be detected before generic CZ/SK tokens.
-  // Important: "CZ tit/subs/title/forced" is NOT CZ audio.
+  // Subtitle markers are evaluated first. A filename such as "CZ titulky"
+  // must never be promoted to Czech audio.
   const czSubs = /\b(cz|cze|cs|ceske|cesky|czech)\s*(tit|titulky|sub|subs|subtitle|forced|title)\b|cztit|czforced/.test(n);
   const skSubs = /\b(sk|svk|slovak|slovensky)\s*(tit|titulky|sub|subs|subtitle|forced|title)\b|sktit|skforced/.test(n);
 
@@ -369,32 +368,63 @@ function detectAudio(name) {
   const skDubStrong = /skdab|\b(sk|svk|slovak|slovensky)\s*(dab|dub|dabing|dubbing|audio)\b|\b(slovak)\s*(audio|dub|dubbing)\b/.test(n);
   const enStrong = /\b(en|eng|english)\s*(audio|dab|dub|dabing|dubbing)\b|\b(en|eng)\s*dabing\b/.test(n);
 
-  const hasCZ = /(^|[^a-z])(cz|cze|cs|cesky|czech)([^a-z]|$)/.test(n) || /czhd/i.test(raw);
+  const hasCZ = /(^|[^a-z])(cz|cze|cs|cesky|czech)([^a-z]|$)/.test(n);
   const hasSK = /(^|[^a-z])(sk|svk|slovak|slovensky)([^a-z]|$)/.test(n);
   const hasEN = /(^|[^a-z])(en|eng|english)([^a-z]|$)/.test(n);
-  const explicitMulti = /multi\s*audio|dual\s*audio|dual/.test(n);
+
+  // A bare language token is ambiguous. Treat it as verified audio only when it
+  // appears close to an audio codec or a channel layout (CZ AC3 5.1, DTS CZ, ...).
+  const audioEvidence = '(?:aac|ac3|eac3|ddp|dd|dts|truehd|atmos|mp3|flac|opus|vorbis|pcm|2\\s*0|5\\s*1|7\\s*1)';
+  function languageNearAudio(languagePattern) {
+    const forward = new RegExp('\\b(?:' + languagePattern + ')\\b(?:\\s+[a-z0-9]+){0,3}\\s+\\b' + audioEvidence + '\\b');
+    const reverse = new RegExp('\\b' + audioEvidence + '\\b(?:\\s+[a-z0-9]+){0,3}\\s+\\b(?:' + languagePattern + ')\\b');
+    return forward.test(n) || reverse.test(n);
+  }
+
+  const czAudioContext = !czSubs && languageNearAudio('cz|cze|cs|cesky|czech');
+  const skAudioContext = !skSubs && languageNearAudio('sk|svk|slovak|slovensky');
+  const enAudioContext = languageNearAudio('en|eng|english');
+  const explicitMulti = /multi\s*audio|dual\s*audio/.test(n);
   const genericDub = /\b(dab|dub|dabing|dubbing|dubbed)\b/.test(n);
 
-  let label = 'Audio neznáme', key = 'any', score = 0;
+  let label = 'Audio neznáme', key = 'any', score = 0, verifiedAudio = false, evidence = 'none';
 
-  if (czDubStrong && skDubStrong) { label = 'CZ/SK Dabing'; key = 'CZ-SK'; score = 105; }
-  else if (czDubStrong) { label = 'CZ Dabing'; key = 'CZ'; score = 100; }
-  else if (skDubStrong) { label = 'SK Dabing'; key = 'SK'; score = 80; }
-  else if (hasCZ && hasEN && !czSubs) { label = 'CZ/EN Audio'; key = 'CZ-EN'; score = 85; }
-  else if (hasSK && hasEN && !skSubs) { label = 'SK/EN Audio'; key = 'SK-EN'; score = 55; }
-  else if (enStrong || hasEN) { label = 'EN Audio'; key = 'EN'; score = 40; }
-  else if (explicitMulti) { label = 'Multi Audio'; key = 'multi'; score = 30; }
-  else if (genericDub) { label = 'Dabing – jazyk neznámy'; key = 'dub'; score = 55; }
-  else if (czSubs) { label = 'CZ titulky'; key = 'sub'; score = 5; }
-  else if (skSubs) { label = 'SK titulky'; key = 'sub'; score = 5; }
-  else if (hasCZ) { label = 'CZ neoverené'; key = 'CZ'; score = 20; }
-  else if (hasSK) { label = 'SK neoverené'; key = 'SK'; score = 15; }
+  if ((czDubStrong || czAudioContext) && (skDubStrong || skAudioContext)) {
+    label = 'CZ/SK Dabing'; key = 'CZ-SK'; score = 105; verifiedAudio = true; evidence = 'explicit-or-codec';
+  } else if (czDubStrong) {
+    label = 'CZ Dabing'; key = 'CZ'; score = 100; verifiedAudio = true; evidence = 'explicit-dub';
+  } else if (skDubStrong) {
+    label = 'SK Dabing'; key = 'SK'; score = 80; verifiedAudio = true; evidence = 'explicit-dub';
+  } else if (czAudioContext && enAudioContext) {
+    label = 'CZ/EN Audio'; key = 'CZ-EN'; score = 85; verifiedAudio = true; evidence = 'audio-codec';
+  } else if (skAudioContext && enAudioContext) {
+    label = 'SK/EN Audio'; key = 'SK-EN'; score = 55; verifiedAudio = true; evidence = 'audio-codec';
+  } else if (czAudioContext) {
+    label = 'CZ Audio'; key = 'CZ'; score = 70; verifiedAudio = true; evidence = 'audio-codec';
+  } else if (skAudioContext) {
+    label = 'SK Audio'; key = 'SK'; score = 55; verifiedAudio = true; evidence = 'audio-codec';
+  } else if (enStrong || enAudioContext) {
+    label = 'EN Audio'; key = 'EN'; score = 40; verifiedAudio = true; evidence = enStrong ? 'explicit-audio' : 'audio-codec';
+  } else if (explicitMulti) {
+    label = 'Multi Audio'; key = 'multi'; score = 30; verifiedAudio = true; evidence = 'explicit-audio';
+  } else if (genericDub) {
+    label = 'Dabing – jazyk neznámy'; key = 'dub'; score = 55; verifiedAudio = true; evidence = 'generic-dub';
+  } else if (czSubs) {
+    label = 'CZ titulky'; key = 'sub'; score = 5; evidence = 'subtitle';
+  } else if (skSubs) {
+    label = 'SK titulky'; key = 'sub'; score = 5; evidence = 'subtitle';
+  } else if (hasCZ || hasSK || hasEN) {
+    // Keep only a tiny ranking hint. Do not expose a language/audio badge or put
+    // the language into the stream name because the token is not proof of audio.
+    score = 5;
+    evidence = 'bare-language-token';
+  }
 
   const subs = [];
   if (czSubs && label !== 'CZ titulky') subs.push('CZ titulky');
   if (skSubs && label !== 'SK titulky') subs.push('SK titulky');
   const subScore = (czSubs && label !== 'CZ titulky' ? 15 : 0) + (skSubs && label !== 'SK titulky' ? 10 : 0);
-  return { label, key, score, subs, subScore };
+  return { label, key, score, subs, subScore, verifiedAudio, evidence };
 }
 function hasEpisodePattern(name) {
   return /\bS\d{1,2}E\d{1,2}\b/i.test(name) || /\b\d{1,2}x\d{1,2}\b/i.test(name);
@@ -859,10 +889,11 @@ function detectBadgeTags(name, file = {}) {
   const audio = file.audio || detectAudio(raw);
   const key = String(audio.key || '');
   const audioLabel = String(audio.label || '');
-  if (key.includes('CZ')) { add('CZ'); add('CZ AUDIO'); }
-  if (key.includes('SK')) { add('SK'); add('SK AUDIO'); }
-  if (key.includes('EN')) { add('EN'); add('EN AUDIO'); }
-  if (key === 'multi') { add('MULTI'); add('MULTI AUDIO'); }
+  const verifiedAudio = audio.verifiedAudio === true;
+  if (verifiedAudio && key.includes('CZ')) { add('CZ'); add('CZ AUDIO'); }
+  if (verifiedAudio && key.includes('SK')) { add('SK'); add('SK AUDIO'); }
+  if (verifiedAudio && key.includes('EN')) { add('EN'); add('EN AUDIO'); }
+  if (verifiedAudio && key === 'multi') { add('MULTI'); add('MULTI AUDIO'); }
   if (key === 'dub' || /dabing|dubbing|dubbed/i.test(audioLabel)) add('DABING');
   if (/^CZ titulky/i.test(audioLabel) || (audio.subs || []).some(x => /^CZ /i.test(x))) add('CZ SUBS');
   if (/^SK titulky/i.test(audioLabel) || (audio.subs || []).some(x => /^SK /i.test(x))) add('SK SUBS');
@@ -927,10 +958,10 @@ function buildExtraNuvioFilters(baseUrl) {
 
 function adaptNardBadgeFilters(filters) {
   const languagePatterns = new Map([
-    ['f1', '(?i)\\b(?:CZ|CZE|CES|CESKY|CESTINA|CZECH)(?:\\s+AUDIO)?\\b(?!\\s+SUBS)'],
-    ['f2', '(?i)\\b(?:SK|SVK|SLOVAK|SLOVENCINA|SLOVENSKY)(?:\\s+AUDIO)?\\b(?!\\s+SUBS)'],
-    ['l-en', '(?i)\\b(?:EN|ENG|ENGLISH)(?:\\s+AUDIO)?\\b(?!\\s+SUBS)'],
-    ['l-mu', '(?i)\\b(?:MULTI|MUL)(?:\\s+AUDIO)?\\b(?!\\s+SUBS)']
+    ['f1', '(?i)\\b(?:CZ|CZE|CES|CESKY|CESTINA|CZECH)\\s+AUDIO\\b'],
+    ['f2', '(?i)\\b(?:SK|SVK|SLOVAK|SLOVENCINA|SLOVENSKY)\\s+AUDIO\\b'],
+    ['l-en', '(?i)\\b(?:EN|ENG|ENGLISH)\\s+AUDIO\\b'],
+    ['l-mu', '(?i)\\b(?:MULTI|MUL)\\s+AUDIO\\b']
   ]);
   const languageNames = new Map([
     ['CZE', languagePatterns.get('f1')],

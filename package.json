@@ -1,7 +1,7 @@
 {
   "name": "fastshare-stremio-addon-v6-configurator",
-  "version": "6.3.6",
-  "description": "FastShare Stremio addon with localized search, precise ranking, and a NardBadges-compatible Nuvio badge preset including CZ/SK audio and subtitles.",
+  "version": "6.3.7",
+  "description": "FastShare Stremio addon with localized search, precise ranking, NardBadges design, and verified audio-language badges.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

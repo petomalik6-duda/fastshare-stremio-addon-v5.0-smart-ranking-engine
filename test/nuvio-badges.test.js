@@ -85,3 +85,32 @@ test('merged badge preset preserves base filters and de-duplicates ids and names
   assert.equal(merged.filter(x => x.id === 'fs-nard-recommended').length, 1);
   assert.equal(merged.filter(x => x.name === 'WebDL').length, 1);
 });
+
+test('bare CZ token does not become a verified audio badge (Citizen Vigilante regression)', () => {
+  const name = 'Citizen.Vigilante.2025.CZ.1080p.WEB-DL.x264.mkv';
+  const audio = detectAudio(name);
+  const file = { name, quality: '1080p', audio, ext: 'MKV' };
+  const tags = detectBadgeTags(name, file);
+  assert.equal(audio.key, 'any');
+  assert.equal(audio.verifiedAudio, false);
+  assert.equal(audio.evidence, 'bare-language-token');
+  assert.ok(!tags.includes('CZ'));
+  assert.ok(!tags.includes('CZ AUDIO'));
+});
+
+test('CZ next to an audio codec is accepted as verified audio', () => {
+  const name = 'Film.2026.1080p.WEB-DL.CZ.AC3.5.1.mkv';
+  const audio = detectAudio(name);
+  const tags = detectBadgeTags(name, { name, quality: '1080p', audio, ext: 'MKV' });
+  assert.equal(audio.key, 'CZ');
+  assert.equal(audio.verifiedAudio, true);
+  assert.equal(audio.evidence, 'audio-codec');
+  assert.ok(tags.includes('CZ AUDIO'));
+});
+
+test('adapted Nard language filters require explicit AUDIO token', () => {
+  const input = [{ id: 'f1', name: 'CZE', pattern: 'old' }];
+  const [filter] = adaptNardBadgeFilters(input);
+  assert.match(filter.pattern, /\\s\+AUDIO/);
+  assert.doesNotMatch(filter.pattern, /AUDIO\)\?/);
+});

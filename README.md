@@ -119,7 +119,7 @@ npm test
 npm start
 ```
 
-## Nuvio badges – NardBadges dizajn (v6.3.6)
+## Nuvio badges – NardBadges dizajn (v6.3.7)
 
 Hlavný endpoint používa vizuálny štýl projektu NardBadges a dopĺňa filtre špecifické pre addon:
 
@@ -148,3 +148,8 @@ NUVIO_BASE_BADGES_URL=https://.../iny-preset.json
 ```
 
 Po zmene URL v Nuvio aplikáciu úplne reštartuj alebo vymaž cache badge konfigurácie.
+
+
+## Oprava v6.3.7 – overené audio badge
+
+Samostatný token `CZ`, `SK` alebo `EN` v názve súboru už nie je považovaný za dôkaz zvukovej stopy. Jazykový badge sa zobrazí iba pri explicitnom označení (`CZ dabing`, `CZ audio`) alebo pri jazyku vedľa zvukového kodeku/kanálov (`CZ AC3 5.1`, `DTS CZ`). Tým sa opravuje falošný `CZ audio` badge pri výsledku `Citizen Vigilante`.
