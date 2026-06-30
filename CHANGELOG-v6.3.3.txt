@@ -1,0 +1,8 @@
+FastShare Stremio addon v6.3.3
+
+- Fixes concert/music-video title matching such as Sade: Bring Me Home - Live 2011.
+- Artist name plus the generic word "Live" is no longer enough to match a longer concert title.
+- Removes broad one-word searches such as "live" and "home" for long titles.
+- Keeps one-word searches for real one-word titles and numbered sequel searches such as "Pradu 2" / "Prad 2".
+- Accepts a year embedded in the official title (2011) as well as the metadata release year (2012).
+- Preserves automatic CZ/SK titles, TMDB/Wikidata fallback, Render deployment fix, series support and Tuner/Lonely Tunes protection.
