@@ -1,0 +1,6 @@
+FastShare Stremio Addon v6.4.1
+
+- Fixed series false positives where an exact SxxExx match could bypass title validation entirely.
+- Exact/multi-episode releases may still use relaxed matching for multi-word titles, but at least one title token must match.
+- One-word titles remain strict, so Reacher S04E07 cannot resolve to Preacher S04E07.
+- Added regression tests for wrong Preacher S04E07, correct Reacher S04E07, and partial multi-word series title fallback.

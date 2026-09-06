@@ -296,8 +296,15 @@ function titleMatchScore(fileName, meta, type) {
   if (type === 'movie' && !best.strong) {
     return { reject: true, score: -999, reasons: ['weak-title-match reject'] };
   }
-  if (type === 'series' && !best.strong && !['exact-episode', 'multi-episode'].includes(seriesKind)) {
-    return { reject: true, score: -999, reasons: ['weak-series-title reject'], seriesKind };
+  if (type === 'series' && !best.strong) {
+    const exactEpisode = ['exact-episode', 'multi-episode'].includes(seriesKind);
+    const hasTitleEvidence = best.matched > 0 && best.score > 0;
+    // An exact SxxExx pattern may relax how much of a multi-word title must match,
+    // but it must never replace title validation completely. This prevents false
+    // positives such as Reacher S04E07 resolving to Preacher S04E07.
+    if (!exactEpisode || !hasTitleEvidence) {
+      return { reject: true, score: -999, reasons: ['weak-series-title reject'], seriesKind };
+    }
   }
 
   const strongTitle = best.strong;
