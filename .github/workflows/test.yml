@@ -38,5 +38,5 @@ jobs:
 
       - name: Runtime smoke test
         run: |
-          node -e "const {app}=require('./src/server'); if (!app) process.exit(1); console.log('modular runtime import OK')"
-          node -e "const compat=require('./server'); const modular=require('./src/server'); if (!compat.app || compat.app !== modular.app) process.exit(1); console.log('legacy entrypoint delegates to modular runtime')"
+          node -e "const launcher=require('./src/launcher'); if (!launcher.app || !launcher.guardedRankFiles) process.exit(1); console.log('guarded production launcher import OK')"
+          node -e "const compat=require('./server'); const launcher=require('./src/launcher'); const modular=require('./src/server'); if (!compat.app || compat.app !== launcher.app || launcher.app !== modular.app) process.exit(1); console.log('all entrypoints share guarded runtime app')"
