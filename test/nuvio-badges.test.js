@@ -1,20 +1,22 @@
+'use strict';
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { detectAudio } = require('../src/ranking');
 const {
-  detectAudio,
   detectBadgeTags,
-  streamObj,
   buildExtraNuvioFilters,
   adaptNardBadgeFilters,
   mergeNuvioBadgeFilters,
   NARD_BADGES_URL
-} = require('../server');
+} = require('../src/badges');
+const { streamObj } = require('../src/server');
 
 test('normalizes common Nuvio/Nard badge tokens', () => {
   const name = 'Film.2026.2160p.WEB-DL.DV.HDR10Plus.HEVC.Atmos.DDP5.1.CZ.Dabing.mkv';
   const file = { name, size: 8 * 1024 ** 3, quality: '4K', audio: detectAudio(name), ext: 'MKV', durationText: '2:00:00' };
   const tags = detectBadgeTags(name, file);
-  for (const expected of ['WEB-DL','2160p','DV','HDR10+','HEVC','Atmos','DD+','5.1','CZ','CZ AUDIO','DABING','MKV']) {
+  for (const expected of ['WEB-DL', '2160p', 'DV', 'HDR10+', 'HEVC', 'Atmos', 'DD+', '5.1', 'CZ', 'CZ AUDIO', 'DABING', 'MKV']) {
     assert.ok(tags.includes(expected), `missing ${expected}: ${tags.join(', ')}`);
   }
 });
@@ -67,7 +69,7 @@ test('adapts Nard language filters to addon CZ/SK/EN/MULTI tokens', () => {
 test('local gap filters use transparent Nard-style badges', () => {
   const filters = buildExtraNuvioFilters('https://addon.example');
   const ids = new Set(filters.map(x => x.id));
-  for (const id of ['fs-nard-recommended','fs-nard-dabing','fs-nard-subs-cz','fs-nard-subs-sk','fs-nard-res-480','fs-nard-container-mkv','fs-nard-container-mp4']) {
+  for (const id of ['fs-nard-recommended', 'fs-nard-dabing', 'fs-nard-subs-cz', 'fs-nard-subs-sk', 'fs-nard-res-480', 'fs-nard-container-mkv', 'fs-nard-container-mp4']) {
     assert.ok(ids.has(id), `missing filter ${id}`);
   }
   assert.ok(filters.every(x => x.imageURL.startsWith('https://addon.example/badges/nard-')));
