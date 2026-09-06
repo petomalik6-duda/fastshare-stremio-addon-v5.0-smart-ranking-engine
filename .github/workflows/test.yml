@@ -28,6 +28,7 @@ jobs:
 
       - name: Syntax check
         run: |
+          node --check server.js
           for file in src/*.js; do
             node --check "$file"
           done
@@ -36,4 +37,6 @@ jobs:
         run: npm test
 
       - name: Runtime smoke test
-        run: node -e "const {app}=require('./src/server'); if (!app) process.exit(1); console.log('v6.4 runtime import OK')"
+        run: |
+          node -e "const {app}=require('./src/server'); if (!app) process.exit(1); console.log('modular runtime import OK')"
+          node -e "const compat=require('./server'); const modular=require('./src/server'); if (!compat.app || compat.app !== modular.app) process.exit(1); console.log('legacy entrypoint delegates to modular runtime')"
