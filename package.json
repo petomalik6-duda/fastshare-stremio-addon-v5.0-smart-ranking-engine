@@ -1,7 +1,7 @@
 {
   "name": "fastshare-stremio-addon-v6-configurator",
-  "version": "6.4.2",
-  "description": "FastShare Stremio addon with staged localized search, resilient ranking, NardBadges design, verified audio-language badges, and country flags.",
+  "version": "6.4.3",
+  "description": "FastShare Stremio addon with staged localized search, resilient ranking, NardBadges design, verified audio-language badges, country flags, and legacy Render entrypoint compatibility.",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
