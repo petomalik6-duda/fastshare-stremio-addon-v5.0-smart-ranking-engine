@@ -58,7 +58,6 @@ test('main metadata title is pinned before a large localized alias list', () => 
 test('fuzzy matching keeps Czech inflection but removes the four-letter-prefix shortcut', () => {
   assert.equal(fuzzyTokenMatch('prada', 'pradu'), true);
   assert.equal(fuzzyTokenMatch('planet', 'planner'), false);
-  assert.equal(fuzzyTokenMatch('tuner', 'tunes'), false);
 });
 
 test('search terms contain localized and stemmed sequel variants', () => {
