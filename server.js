@@ -1,10 +1,9 @@
 'use strict';
 
 // Compatibility entrypoint for older Render services that still use
-// `node server.js` as their Start Command. The production implementation lives
-// in src/server.js; keeping this shim prevents old dashboard settings from
-// silently running the obsolete v6.3.x ranking engine.
-const runtime = require('./src/server');
+// `node server.js` as their Start Command. The launcher applies the final
+// series-title safety guard before loading the modular production runtime.
+const runtime = require('./src/launcher');
 const { PORT, VERSION } = require('./src/config');
 
 if (require.main === module) {
