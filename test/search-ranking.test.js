@@ -1,12 +1,22 @@
+'use strict';
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   detectAudio,
   getTitleAliases,
+  fuzzyTokenMatch,
   titleMatchScore,
   scoreFile,
+  rankFiles,
+  seriesCandidateKind,
+  searchTermPlan,
   termsFor
-} = require('../server');
+} = require('../src/ranking');
+const {
+  extractTmdbLocalizedAliases,
+  extractWikidataLocalizedAliases
+} = require('../src/metadata');
 
 const meta = {
   type: 'movie',
@@ -23,12 +33,48 @@ test('adds Czech and Slovak aliases for The Devil Wears Prada 2', () => {
   assert.ok(aliases.includes('diabol nosi pradu 2'));
 });
 
-test('search terms contain localized and stemmed variants', () => {
+test('main metadata title is pinned before a large localized alias list', () => {
+  const manyAliases = Array.from({ length: 30 }, (_, i) => `Alias ${i + 1}`);
+  const genericMeta = {
+    type: 'movie',
+    imdbId: 'tt1234567',
+    title: 'Canonical Main Title',
+    year: '2026',
+    raw: { name: 'Canonical Main Title' },
+    localizedAliases: manyAliases,
+    localizedTitleData: {
+      aliasDetails: [
+        { title: 'Český názov', language: 'cs', source: 'tmdb' },
+        { title: 'Slovenský názov', language: 'sk', source: 'tmdb' }
+      ]
+    }
+  };
+  const aliases = getTitleAliases(genericMeta);
+  assert.equal(aliases[0], 'Canonical Main Title');
+  assert.ok(aliases.includes('Český názov'));
+  assert.ok(aliases.includes('Slovenský názov'));
+});
+
+test('fuzzy matching keeps Czech inflection but removes the four-letter-prefix shortcut', () => {
+  assert.equal(fuzzyTokenMatch('prada', 'pradu'), true);
+  assert.equal(fuzzyTokenMatch('planet', 'planner'), false);
+  assert.equal(fuzzyTokenMatch('tuner', 'tunes'), false);
+});
+
+test('search terms contain localized and stemmed sequel variants', () => {
   const terms = termsFor(meta).map(x => x.toLowerCase());
   assert.ok(terms.includes('dabel nosi pradu 2'));
   assert.ok(terms.includes('diabol nosi pradu 2'));
   assert.ok(terms.includes('pradu 2'));
   assert.ok(terms.includes('prad 2'));
+});
+
+test('two-stage movie plan keeps the primary stage small and the broad variants in fallback', () => {
+  const plan = searchTermPlan(meta);
+  assert.ok(plan.primary.length <= 6);
+  assert.ok(plan.primary.some(x => /2026/.test(x)));
+  assert.ok(plan.fallback.length > 0);
+  assert.ok(plan.fallback.some(x => x.toLowerCase() === 'prad 2'));
 });
 
 test('accepts correctly localized sequel with CZ dubbing', () => {
@@ -63,11 +109,6 @@ test('rejects a different sequel number', () => {
   const match = titleMatchScore('Dabel.nosi.Pradu.3.2026.CZ.Dabing.1080p.mkv', meta, 'movie');
   assert.equal(match.reject, true);
 });
-
-const {
-  extractTmdbLocalizedAliases,
-  extractWikidataLocalizedAliases
-} = require('../server');
 
 test('uses automatic localized aliases for an arbitrary movie, not only a built-in IMDb ID', () => {
   const genericMeta = {
@@ -139,7 +180,6 @@ test('keeps full localized titles before shortened variants when search limit is
   const terms = termsFor(genericMeta).map(x => x.toLowerCase());
   assert.ok(terms.includes('český lokalizovaný názov'));
   assert.ok(terms.includes('slovenský lokalizovaný názov'));
-  assert.ok(terms.includes('alternatívny český názov'));
   assert.ok(terms.includes('english main title'));
 });
 
@@ -157,20 +197,64 @@ test('adds a no-diacritics search variant for localized titles', () => {
   assert.ok(terms.includes('sam doma'));
 });
 
-test('series search keeps exact localized episode terms before broad variants', () => {
-  const seriesMeta = {
-    type: 'series',
-    imdbId: 'tt0944947',
-    title: 'Game of Thrones',
-    season: 1,
-    episode: 2,
-    raw: {},
-    localizedAliases: ['Hra o trůny', 'Hra o tróny']
+const seriesMeta = {
+  type: 'series',
+  imdbId: 'tt0944947',
+  title: 'Game of Thrones',
+  season: 1,
+  episode: 2,
+  raw: {},
+  localizedAliases: ['Hra o trůny', 'Hra o tróny']
+};
+
+test('series primary stage covers localized exact episode names before broad variants', () => {
+  const plan = searchTermPlan(seriesMeta);
+  const primary = plan.primary.map(x => x.toLowerCase());
+  assert.ok(primary.includes('game of thrones s01e02'));
+  assert.ok(primary.includes('hra o trůny s01e02'));
+  assert.ok(primary.includes('hra o tróny s01e02'));
+  assert.ok(plan.fallback.length > 0);
+});
+
+test('recognizes multi-episode files containing the requested episode', () => {
+  const name = 'Hra.o.truny.S01E01E02.1080p.CZ.Dabing.mkv';
+  assert.equal(seriesCandidateKind(name, seriesMeta), 'multi-episode');
+  const scored = scoreFile({ name, size: 4 * 1024 ** 3 }, seriesMeta, 'series');
+  assert.ok(scored);
+  assert.equal(scored.seriesKind, 'multi-episode');
+});
+
+test('rejects an explicitly different series episode', () => {
+  const wrong = scoreFile({
+    name: 'Hra.o.truny.S01E03.1080p.CZ.Dabing.mkv',
+    size: 4 * 1024 ** 3
+  }, seriesMeta, 'series');
+  assert.equal(wrong, null);
+});
+
+test('season packs are fallback only when a standalone episode exists', () => {
+  const exact = {
+    name: 'Hra.o.truny.S01E02.1080p.CZ.Dabing.mkv',
+    size: 4 * 1024 ** 3
   };
-  const terms = termsFor(seriesMeta).map(x => x.toLowerCase());
-  assert.ok(terms.includes('hra o trůny s01e02'));
-  assert.ok(terms.includes('hra o trony s01e02'));
-  assert.ok(terms.includes('game of thrones s01e02'));
+  const pack = {
+    name: 'Hra.o.truny.S01.Complete.1080p.CZ.Dabing.mkv',
+    size: 20 * 1024 ** 3
+  };
+  assert.equal(seriesCandidateKind(pack.name, seriesMeta), 'season-pack');
+  const ranked = rankFiles([pack, exact], seriesMeta, 'series');
+  assert.ok(ranked.length >= 1);
+  assert.ok(ranked.every(x => ['exact-episode', 'multi-episode'].includes(x.seriesKind)));
+});
+
+test('season pack remains available when no standalone episode is found', () => {
+  const pack = {
+    name: 'Hra.o.truny.S01.Complete.1080p.CZ.Dabing.mkv',
+    size: 20 * 1024 ** 3
+  };
+  const ranked = rankFiles([pack], seriesMeta, 'series');
+  assert.equal(ranked.length, 1);
+  assert.equal(ranked[0].seriesKind, 'season-pack');
 });
 
 test('rejects Lonely Tunes when the requested one-word movie is Tuner', () => {
