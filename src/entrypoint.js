@@ -19,10 +19,6 @@ function canonicalSeriesNearCollision(fileName, meta, type) {
   const fileTokens = normalize(fileName).split(' ').filter(Boolean);
   if (fileTokens.includes(expected)) return false;
 
-  // Final safety net for one-word series. If a release contains a token that is
-  // only a near-spelling of the canonical title (Reacher -> Preacher, etc.) but
-  // not the exact canonical token, reject it even if an external metadata alias
-  // accidentally claims that spelling as a valid title.
   return fileTokens.some(actual => {
     if (actual === expected || actual.length < 5) return false;
     if (Math.abs(actual.length - expected.length) > 2) return false;
@@ -44,12 +40,54 @@ function explicitMovieYearCollision(fileName, meta, type) {
   if (years.includes(expectedYear)) return false;
 
   const nearestDifference = Math.min(...years.map(year => Math.abs(year - expectedYear)));
-
-  // A movie can legitimately have a festival/theatrical year offset of one or
-  // occasionally two years. Anything farther away is a different release when
-  // the filename states the year explicitly. This prevents high audio/quality
-  // bonuses from reviving an old same-title movie (e.g. Mutiny 1952 vs 2026).
   return nearestDifference > 2;
+}
+
+const MOVIE_RELEASE_MARKERS = new Set([
+  '2160p', '1080p', '720p', '480p', '4k', 'uhd', 'hdr', 'dv', 'dolby',
+  'web', 'webdl', 'webrip', 'bluray', 'brrip', 'hdrip', 'dvdrip', 'remux',
+  'h264', 'h265', 'x264', 'x265', 'hevc', 'av1', 'mkv', 'mp4', 'avi', 'mov', 'm4v',
+  'aac', 'ac3', 'eac3', 'dd', 'ddp', 'dts', 'truehd', 'atmos', 'flac', 'opus', 'mp3',
+  'cz', 'cze', 'cs', 'cesky', 'czech', 'sk', 'svk', 'slovak', 'en', 'eng', 'english',
+  'dab', 'dub', 'dabing', 'dubbing', 'audio', 'tit', 'titulky', 'sub', 'subs', 'forced',
+  'proper', 'repack', 'extended', 'unrated', 'theatrical', 'directors', 'cut'
+]);
+
+function movieTitlePrefix(fileName) {
+  const tokens = normalize(fileName).split(' ').filter(Boolean);
+  const title = [];
+  for (const token of tokens) {
+    if (/^(19\d{2}|20\d{2})$/.test(token)) break;
+    if (MOVIE_RELEASE_MARKERS.has(token)) break;
+    title.push(token);
+  }
+  return title.join(' ').trim();
+}
+
+function oneWordMovieAliasCollision(fileName, meta, type) {
+  if (type !== 'movie') return false;
+
+  const aliases = ranking.getTitleAliases(meta);
+  if (!aliases.length) return false;
+
+  const candidates = aliases
+    .map(alias => ({ alias, normalized: normalize(alias), ...ranking.aliasMatchScore(fileName, alias) }))
+    .sort((a, b) => b.score - a.score || b.ratio - a.ratio);
+  const best = candidates[0];
+
+  // Only tighten candidates whose winning title evidence is a one-word alias.
+  // Multi-word titles keep the normal ranking path.
+  if (!best?.strong || !best.strictShortTitle) return false;
+
+  const prefix = movieTitlePrefix(fileName);
+  if (!prefix) return false;
+
+  // A valid release title must equal one complete known alias before technical
+  // release tags/year begin. This blocks cases such as "Stříbrná vzpoura" or
+  // "Vzpoura na Bounty" from matching the one-word alias "Vzpoura" while still
+  // keeping Mutiny/Vzpoura/Vzbura releases with normal release suffixes.
+  const exactKnownTitle = aliases.some(alias => normalize(alias) === prefix);
+  return !exactKnownTitle;
 }
 
 function guardedRankFiles(files, meta, type) {
@@ -58,20 +96,18 @@ function guardedRankFiles(files, meta, type) {
     return ranked.filter(file => !canonicalSeriesNearCollision(file?.name || '', meta, type));
   }
   if (type === 'movie') {
-    return ranked.filter(file => !explicitMovieYearCollision(file?.name || '', meta, type));
+    return ranked.filter(file => {
+      const name = file?.name || '';
+      return !explicitMovieYearCollision(name, meta, type) && !oneWordMovieAliasCollision(name, meta, type);
+    });
   }
   return ranked;
 }
 
-// Patch the export before loading src/server.js. src/server.js destructures
-// rankFiles during module initialization, so both npm start and the legacy root
-// server entrypoint use this guarded implementation.
 ranking.rankFiles = guardedRankFiles;
 
 const runtime = require('./server');
 
-// Extra deployment diagnostics. This lets us distinguish the GitHub version from
-// the code actually running on Render without exposing credentials.
 runtime.app.get('/deploy-info', (req, res) => {
   res.set('Cache-Control', 'no-store');
   res.json({
@@ -97,5 +133,7 @@ module.exports = {
   start,
   canonicalSeriesNearCollision,
   explicitMovieYearCollision,
+  movieTitlePrefix,
+  oneWordMovieAliasCollision,
   guardedRankFiles
 };
