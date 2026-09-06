@@ -1,6 +1,6 @@
 'use strict';
 
-const VERSION = '6.4.0';
+const VERSION = '6.4.1';
 const PORT = Number(process.env.PORT || 10000);
 const BASE_URL = String(process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
 const API = 'https://fastshare.cz/api/api_kodi.php';
