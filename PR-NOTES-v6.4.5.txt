@@ -1,0 +1,5 @@
+Fix explicit movie-year collisions for same-title movies.
+
+Mutiny (2026), IMDb tt32338669, can collide with older movies named Mutiny. The existing ranking only penalized a far-off explicit year, so CZ audio/4K/large-size bonuses could still lift an old release above the movie threshold.
+
+v6.4.5 adds a final production guard that rejects a ranked movie candidate when the filename explicitly states a year more than 2 years away from the requested metadata year. Correct-year and yearless candidates are retained. Series behavior is unchanged.

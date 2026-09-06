@@ -1,0 +1,6 @@
+FastShare Stremio Addon v6.4.5
+
+- Reject movie candidates with an explicit year more than 2 years away from the requested movie year.
+- Prevent strong audio/quality/size bonuses from reviving an old same-title movie.
+- Regression coverage for Mutiny (2026) vs Mutiny (1952) and Mutiny on the Bounty (1962).
+- Keep correct-year and yearless fallback releases available.
