@@ -32,10 +32,35 @@ function canonicalSeriesNearCollision(fileName, meta, type) {
   });
 }
 
+function explicitMovieYearCollision(fileName, meta, type) {
+  if (type !== 'movie') return false;
+
+  const expectedMatch = String(meta?.year || meta?.releaseInfo || meta?.raw?.releaseInfo || '').match(/\b(19\d{2}|20\d{2})\b/);
+  if (!expectedMatch) return false;
+  const expectedYear = Number(expectedMatch[1]);
+
+  const years = [...String(fileName || '').matchAll(/\b(19\d{2}|20\d{2})\b/g)].map(match => Number(match[1]));
+  if (!years.length) return false;
+  if (years.includes(expectedYear)) return false;
+
+  const nearestDifference = Math.min(...years.map(year => Math.abs(year - expectedYear)));
+
+  // A movie can legitimately have a festival/theatrical year offset of one or
+  // occasionally two years. Anything farther away is a different release when
+  // the filename states the year explicitly. This prevents high audio/quality
+  // bonuses from reviving an old same-title movie (e.g. Mutiny 1952 vs 2026).
+  return nearestDifference > 2;
+}
+
 function guardedRankFiles(files, meta, type) {
   const ranked = baseRankFiles(files, meta, type);
-  if (type !== 'series') return ranked;
-  return ranked.filter(file => !canonicalSeriesNearCollision(file?.name || '', meta, type));
+  if (type === 'series') {
+    return ranked.filter(file => !canonicalSeriesNearCollision(file?.name || '', meta, type));
+  }
+  if (type === 'movie') {
+    return ranked.filter(file => !explicitMovieYearCollision(file?.name || '', meta, type));
+  }
+  return ranked;
 }
 
 // Patch the export before loading src/server.js. src/server.js destructures
@@ -71,5 +96,6 @@ module.exports = {
   ...runtime,
   start,
   canonicalSeriesNearCollision,
+  explicitMovieYearCollision,
   guardedRankFiles
 };
