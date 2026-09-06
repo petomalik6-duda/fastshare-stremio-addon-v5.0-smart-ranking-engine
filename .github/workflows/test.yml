@@ -1,0 +1,39 @@
+name: Test
+
+on:
+  push:
+    branches: [main, upgrade-v6.4.0]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --omit=dev --no-audit --no-fund
+
+      - name: Syntax check
+        run: |
+          for file in src/*.js; do
+            node --check "$file"
+          done
+
+      - name: Unit and regression tests
+        run: npm test
+
+      - name: Runtime smoke test
+        run: node -e "const {app}=require('./src/server'); if (!app) process.exit(1); console.log('v6.4 runtime import OK')"
