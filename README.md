@@ -1,36 +1,74 @@
-# FastShare Stremio Addon v6.3.5
+# FastShare Stremio Addon v6.4.0
 
-Táto verzia všeobecne dopĺňa české a slovenské názvy pre filmy aj seriály podľa IMDb ID. Už nie je odkázaná iba na ručne zapísaný alias jedného filmu.
+FastShare stream addon pre Stremio/Nuvio s lokalizovaným CZ/SK vyhľadávaním, presným rankingom, NardBadges dizajnom a overovaním audio jazyka z názvu release.
 
-## Ako funguje lokalizované vyhľadávanie
+## Čo je nové vo v6.4.0
 
-Pri požiadavke na stream addon zostaví názvy z viacerých zdrojov:
+### Presnejší fuzzy ranking
 
-1. názov a alternatívne názvy z Cinemety,
-2. české a slovenské názvy z TMDB, ak je nastavený TMDB token alebo API kľúč,
-3. české, slovenské a anglické názvy z Wikidata bez potreby API kľúča,
-4. voliteľné ručné aliasy z `TITLE_ALIASES_JSON`,
-5. vstavané aliasy iba ako núdzový fallback pre overené problematické tituly.
+v6.4 odstránila staré pravidlo, podľa ktorého sa dve dlhšie slová mohli považovať za zhodné iba preto, že mali rovnaké prvé štyri písmená. Ranking teraz používa Levenshtein vzdialenosť a minimálnu podobnosť približne 80–82 %.
 
-Výsledky sa držia v pamäťovej cache, aby sa externé zdroje nevolali pri každom otvorení filmu.
+To zachováva užitočné CZ/SK tvary ako `Prada` / `Pradu`, ale znižuje falošné zhody podobných názvov.
 
-## Odporúčané nastavenie TMDB
+### Dvojfázové FastShare vyhľadávanie
 
-Wikidata funguje bez kľúča, ale najširšie pokrytie lokalizovaných názvov poskytne TMDB. Na Renderi nastav jednu z týchto premenných:
+Addon už neposiela všetky široké dotazy naraz.
 
-```txt
-TMDB_READ_ACCESS_TOKEN=tvoj_TMDB_Read_Access_Token
-```
+1. **Primary stage** skúsi najpresnejšie hlavné/CZ/SK názvy s rokom alebo presným `SxxExx`.
+2. Ak už nájde dostatok kvalitných výsledkov, vyhľadávanie skončí.
+3. **Fallback stage** sa spustí iba keď primary stage nemá dosť použiteľných streamov.
 
-alebo:
+Výsledkom je menej FastShare API requestov a rýchlejšie otvorenie titulov, ktoré sa nájdu presným názvom.
 
-```txt
-TMDB_API_KEY=tvoj_TMDB_API_key
-```
+### Timeout a izolácia chýb
 
-Stačí jedna z nich. Read Access Token je odporúčaný.
+Každý FastShare search má vlastný timeout. Zlyhanie alebo timeout jedného vyhľadávacieho termu už nezruší celý stream request; ostatné termy sa normálne vyhodnotia.
 
-## Render nastavenie
+### Krátkodobá FastShare search cache
+
+Úspešné výsledky vyhľadávania sa predvolene cacheujú 3 minúty a cache je oddelená podľa FastShare session. HTTP chyby a timeouty sa necachujú.
+
+### Stabilné poradie aliasov
+
+Hlavný metadata názov je vždy prvý a nemôže vypadnúť po dosiahnutí limitu aliasov. Potom majú prioritu CZ, SK, originálne/EN a ostatné automatické aliasy; ručné fallback aliasy sú až na konci.
+
+### Lepšie seriály
+
+Ranking rozlišuje:
+
+- presnú epizódu,
+- multi-episode súbor, napr. `S01E01E02`,
+- season pack / complete season,
+- nesprávnu epizódu alebo sériu.
+
+Ak sa nájde samostatná požadovaná epizóda, season pack sa z výsledkov odstráni. Pack zostáva fallback iba vtedy, keď samostatná epizóda nie je dostupná.
+
+### Modulárna architektúra
+
+Produkčný runtime sa presunul do `src/`:
+
+- `src/config.js` – konfigurácia a environment premenné,
+- `src/utils.js` – spoločné utility, cache a timeout fetch,
+- `src/ranking.js` – title/audio/episode ranking a search plán,
+- `src/metadata.js` – Cinemeta, TMDB a Wikidata aliasy,
+- `src/fastshare.js` – login, FastShare search, timeout a cache,
+- `src/badges.js` – Nuvio/NardBadges,
+- `src/server.js` – HTTP/Stremio server a dvojfázový stream pipeline.
+
+Pôvodný koreňový `server.js` zostáva dočasne ako legacy referencia. `npm start` už používa `src/server.js`.
+
+## Lokalizované vyhľadávanie
+
+Pre IMDb titul addon používa:
+
+1. hlavný názov z Cinemety,
+2. české a slovenské názvy z TMDB, ak je nastavený TMDB token alebo API key,
+3. české, slovenské a anglické názvy z Wikidata,
+4. alternatívne názvy z metadata,
+5. voliteľné `TITLE_ALIASES_JSON`,
+6. vstavané overené fallback aliasy.
+
+## Odporúčané Render nastavenie
 
 Build command:
 
@@ -52,104 +90,84 @@ BASE_URL=https://tvoja-sluzba.onrender.com
 TMDB_READ_ACCESS_TOKEN=tvoj_token
 ```
 
-Voliteľné:
+Voliteľné tuning premenné:
 
 ```txt
 MAX_STREAMS=60
 MAX_SEARCH_TERMS=24
+PRIMARY_SEARCH_TERMS=6
+PRIMARY_MATCH_TARGET=6
 MAX_TITLE_ALIASES=12
 SEARCH_CONCURRENCY=3
+FASTSHARE_SEARCH_TIMEOUT_MS=7000
+FASTSHARE_LOGIN_TIMEOUT_MS=7000
+FASTSHARE_SEARCH_CACHE_TTL_MS=180000
+FASTSHARE_SEARCH_CACHE_MAX=1000
+HTTP_TIMEOUT_MS=9000
 METADATA_CACHE_TTL_MS=2592000000
 METADATA_NEGATIVE_CACHE_TTL_MS=21600000
 METADATA_CACHE_MAX=2000
-HTTP_TIMEOUT_MS=9000
 ENABLE_WIKIDATA_ALIASES=1
 ```
 
-`METADATA_CACHE_TTL_MS=2592000000` je približne 30 dní. Neúspešné alebo prázdne dohľadanie sa cacheuje iba približne 6 hodín, aby sa po dočasnom výpadku zdroj skúsil znova. Cache je v pamäti a po reštarte Render služby sa vytvorí znova.
+## Diagnostika
 
-## Nasadenie
+Health:
 
-1. Nahraj celý obsah balíka do GitHub repozitára.
-2. V Renderi doplň TMDB token alebo API kľúč.
-3. Spusti **Manual Deploy → Clear build cache & deploy**.
-4. Otvor `/health`; musí vrátiť `"version":"6.3.5"`.
-5. Odstráň starú inštaláciu addonu zo Stremia a znova ho nainštaluj cez `/configure`.
+```txt
+/health
+```
 
-## Kontrola názvov
+Musí vracať `"version":"6.4.0"`, `"architecture":"modular-v6.4"` a `"searchMode":"two-stage"`.
 
-Bez FastShare prihlásenia môžeš skontrolovať získané aliasy:
+Metadata a plán vyhľadávania:
 
 ```txt
 /debug/meta/movie/tt33612209.json
+/debug/meta/series/tt0944947:1:2.json
 ```
 
-Pre seriál s konkrétnou epizódou:
-
-```txt
-/debug/meta/series/tt0944947:1:1.json
-```
-
-Odpoveď obsahuje:
-
-- `meta.localizedAliases` – automaticky nájdené názvy,
-- `meta.localizedTitleData.sources` – ktoré zdroje odpovedali,
-- `aliases` – finálny zoznam názvov použitý rankingom,
-- `terms` – vyhľadávacie dotazy odoslané na FastShare; pri názvoch s diakritikou obsahujú aj variant bez diakritiky.
-
-Po prihlásení môžeš skontrolovať celý stream proces:
+Po prihlásení celý stream pipeline:
 
 ```txt
 /<config>/debug/stream/movie/tt33612209.json
 ```
 
-## Vlastné aliasy
+Debug odpoveď v6.4 ukazuje zvlášť `search.primary`, `search.fallback`, `searchPlan.usedFallback` a pri jednotlivých FastShare dotazoch aj `cache`, `error` alebo `timedOut`.
 
-Ručný alias zostáva ako posledná možnosť pre titul, ktorý nemá lokalizovaný názov ani v TMDB, ani vo Wikidata:
+## Nuvio badges
+
+Hlavný NardBadges preset:
 
 ```txt
-TITLE_ALIASES_JSON={"tt1234567":["Cesky nazov","Slovensky nazov"]}
+/nuvio-badges.json
 ```
 
-## Lokálne testy
+Alternatívny alias:
 
 ```txt
-npm install
+/nuvio-nard-badges.json
+```
+
+Lokálne doplnkové filtre:
+
+```txt
+/nuvio-badges-extra.json
+```
+
+Audio jazyk sa zobrazí iba pri dostatočnom dôkaze (`CZ dabing`, `CZ audio`, `CZ AC3 5.1`, atď.). Samotný token `CZ`, `SK` alebo `EN` sa nepovažuje za dôkaz zvukovej stopy.
+
+## Testy a CI
+
+Lokálne:
+
+```txt
+npm ci
 npm test
-npm start
 ```
 
-## Nuvio badges – NardBadges dizajn (v6.3.7)
+GitHub Actions automaticky spúšťa syntax check, unit/regression testy a smoke import runtime na Node.js 20 pri pull requestoch a push do sledovaných vetiev.
 
-Hlavný endpoint používa vizuálny štýl projektu NardBadges a dopĺňa filtre špecifické pre addon:
+## Kompatibilita konfigurácie
 
-```txt
-https://tvoja-sluzba.onrender.com/nuvio-badges.json
-```
-
-Rovnaký preset je dostupný aj na:
-
-```txt
-https://tvoja-sluzba.onrender.com/nuvio-nard-badges.json
-```
-
-NardBadges dodáva ikony pre rozlíšenie, zdroj, HDR/Dolby Vision, kodeky, audio, kanály a jazyky. Addon upravuje filtre CZE/SVK/ENG/MUL tak, aby rozpoznali aj jeho tokeny `CZ`, `SK`, `EN` a `MULTI`. Doplnkové badge `DUB`, `CZS`, `SKS`, `REC`, `480P`, `MKV` a `MP4` majú rovnaký transparentný biely obrysový štýl.
-
-Samostatné lokálne doplnky bez upstream presetu sú na:
-
-```txt
-https://tvoja-sluzba.onrender.com/nuvio-badges-extra.json
-```
-
-Voliteľne možno zmeniť upstream zdroj:
-
-```txt
-NUVIO_BASE_BADGES_URL=https://.../iny-preset.json
-```
-
-Po zmene URL v Nuvio aplikáciu úplne reštartuj alebo vymaž cache badge konfigurácie.
-
-
-## Oprava v6.3.7 – overené audio badge
-
-Samostatný token `CZ`, `SK` alebo `EN` v názve súboru už nie je považovaný za dôkaz zvukovej stopy. Jazykový badge sa zobrazí iba pri explicitnom označení (`CZ dabing`, `CZ audio`) alebo pri jazyku vedľa zvukového kodeku/kanálov (`CZ AC3 5.1`, `DTS CZ`). Tým sa opravuje falošný `CZ audio` badge pri výsledku `Citizen Vigilante`.
+v6.4 nemení formát existujúcich konfiguračných URL. Súčasné Base64URL manifest tokeny preto zostávajú kompatibilné. URL stále obsahuje iba zakódované, nie zašifrované prihlasovacie údaje, preto ju nezverejňuj.

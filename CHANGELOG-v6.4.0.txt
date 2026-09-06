@@ -1,0 +1,12 @@
+FastShare Stremio Addon v6.4.0
+
+- fuzzy matching: removed unsafe first-4-characters shortcut; similarity is now based on Levenshtein distance and 80–82% similarity thresholds
+- aliases: main metadata title is pinned first; CZ/SK/original aliases are prioritized before generic/manual fallbacks
+- search: added two-stage primary/fallback FastShare search to avoid unnecessary broad queries
+- resilience: individual FastShare search requests now have timeout/error isolation and no longer fail the whole title
+- cache: added short per-session FastShare search cache (default 3 minutes); failed requests are not cached
+- series: added exact episode, multi-episode, season-pack and mismatch classification; season packs are removed when a standalone requested episode exists
+- architecture: production runtime moved to modular src/ files; legacy root server.js is no longer used by npm start
+- tests: expanded regression coverage for fuzzy matching, alias priority, series packs/multi-episodes and staged search planning
+- CI: added GitHub Actions Node 20 syntax check, tests and runtime smoke import
+- compatibility: existing Base64URL configuration tokens remain supported
