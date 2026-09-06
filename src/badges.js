@@ -57,10 +57,12 @@ function detectBadgeTags(name, file = {}) {
   const key = String(audio.key || '');
   const audioLabel = String(audio.label || '');
   const verifiedAudio = audio.verifiedAudio === true;
-  if (verifiedAudio && key.includes('CZ')) { add('CZ'); add('CZ AUDIO'); }
-  if (verifiedAudio && key.includes('SK')) { add('SK'); add('SK AUDIO'); }
-  if (verifiedAudio && key.includes('EN')) { add('EN'); add('EN AUDIO'); }
-  if (verifiedAudio && key === 'multi') { add('MULTI'); add('MULTI AUDIO'); }
+  // Keep machine-readable AUDIO tokens for Nard/Nuvio filters, while adding
+  // user-visible country flags only when the audio language is verified.
+  if (verifiedAudio && key.includes('CZ')) { add('🇨🇿 CZ'); add('CZ AUDIO'); }
+  if (verifiedAudio && key.includes('SK')) { add('🇸🇰 SK'); add('SK AUDIO'); }
+  if (verifiedAudio && key.includes('EN')) { add('🇬🇧 EN'); add('EN AUDIO'); }
+  if (verifiedAudio && key === 'multi') { add('🌐 MULTI'); add('MULTI AUDIO'); }
   if (key === 'dub' || /dabing|dubbing|dubbed/i.test(audioLabel)) add('DABING');
   if (/^CZ titulky/i.test(audioLabel) || (audio.subs || []).some(x => /^CZ /i.test(x))) add('CZ SUBS');
   if (/^SK titulky/i.test(audioLabel) || (audio.subs || []).some(x => /^SK /i.test(x))) add('SK SUBS');

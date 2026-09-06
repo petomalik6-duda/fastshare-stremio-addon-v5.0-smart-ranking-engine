@@ -16,17 +16,17 @@ test('normalizes common Nuvio/Nard badge tokens', () => {
   const name = 'Film.2026.2160p.WEB-DL.DV.HDR10Plus.HEVC.Atmos.DDP5.1.CZ.Dabing.mkv';
   const file = { name, size: 8 * 1024 ** 3, quality: '4K', audio: detectAudio(name), ext: 'MKV', durationText: '2:00:00' };
   const tags = detectBadgeTags(name, file);
-  for (const expected of ['WEB-DL', '2160p', 'DV', 'HDR10+', 'HEVC', 'Atmos', 'DD+', '5.1', 'CZ', 'CZ AUDIO', 'DABING', 'MKV']) {
+  for (const expected of ['WEB-DL', '2160p', 'DV', 'HDR10+', 'HEVC', 'Atmos', 'DD+', '5.1', '🇨🇿 CZ', 'CZ AUDIO', 'DABING', 'MKV']) {
     assert.ok(tags.includes(expected), `missing ${expected}: ${tags.join(', ')}`);
   }
 });
 
-test('recommended stream keeps all badge tokens on the first line', () => {
+test('recommended stream keeps all badge tokens and country flag on the first line', () => {
   const name = 'Film.2026.1080p.BluRay.DTS-HD.MA.5.1.SK.Dabing.mkv';
   const file = { name, size: 5 * 1024 ** 3, quality: '1080p', audio: detectAudio(name), ext: 'MKV', durationText: '1:40:00', url: 'https://example.invalid/video.mkv' };
   const stream = streamObj(file, 'hash', true);
   const firstLine = stream.title.split('\n')[0];
-  for (const expected of [/Odporúčané/, /BluRay/, /1080p/, /DTS-HD MA/, /5\.1/, /SK/, /DABING/, /MKV/]) assert.match(firstLine, expected);
+  for (const expected of [/Odporúčané/, /BluRay/, /1080p/, /DTS-HD MA/, /5\.1/, /🇸🇰 SK/, /SK AUDIO/, /DABING/, /MKV/]) assert.match(firstLine, expected);
   assert.equal(stream.behaviorHints.filename, name);
   assert.equal(stream.behaviorHints.videoSize, file.size);
 });
@@ -34,16 +34,40 @@ test('recommended stream keeps all badge tokens on the first line', () => {
 test('does not invent HDR or audio codec badges', () => {
   const name = 'Film.2026.720p.CZ.Dabing.mp4';
   const file = { name, quality: '720p', audio: detectAudio(name), ext: 'MP4', size: 1 };
-  assert.deepEqual(detectBadgeTags(name, file), ['720p', 'CZ', 'CZ AUDIO', 'DABING', 'MP4']);
+  assert.deepEqual(detectBadgeTags(name, file), ['720p', '🇨🇿 CZ', 'CZ AUDIO', 'DABING', 'MP4']);
 });
 
-test('subtitle-only files do not create an audio language badge', () => {
+test('CZ/SK verified dubbing shows both country flags', () => {
+  const name = 'Film.2026.1080p.CZ.Dabing.SK.Dabing.mkv';
+  const audio = detectAudio(name);
+  const tags = detectBadgeTags(name, { name, quality: '1080p', audio, ext: 'MKV' });
+  assert.equal(audio.key, 'CZ-SK');
+  assert.ok(tags.includes('🇨🇿 CZ'));
+  assert.ok(tags.includes('🇸🇰 SK'));
+  assert.ok(tags.includes('CZ AUDIO'));
+  assert.ok(tags.includes('SK AUDIO'));
+});
+
+test('verified English audio shows UK flag while multi audio uses globe', () => {
+  const english = 'Film.2026.1080p.EN.Audio.AC3.mkv';
+  const englishTags = detectBadgeTags(english, { name: english, quality: '1080p', audio: detectAudio(english), ext: 'MKV' });
+  assert.ok(englishTags.includes('🇬🇧 EN'));
+  assert.ok(englishTags.includes('EN AUDIO'));
+
+  const multi = 'Film.2026.1080p.Multi.Audio.mkv';
+  const multiTags = detectBadgeTags(multi, { name: multi, quality: '1080p', audio: detectAudio(multi), ext: 'MKV' });
+  assert.ok(multiTags.includes('🌐 MULTI'));
+  assert.ok(multiTags.includes('MULTI AUDIO'));
+});
+
+test('subtitle-only files do not create an audio language badge or flag', () => {
   const name = 'Film.2026.720p.WEBRip.CZ.titulky.mp4';
   const file = { name, quality: '720p', audio: detectAudio(name), ext: 'MP4' };
   const tags = detectBadgeTags(name, file);
   assert.ok(tags.includes('CZ SUBS'));
   assert.ok(tags.includes('MP4'));
   assert.ok(!tags.includes('CZ AUDIO'));
+  assert.ok(!tags.includes('🇨🇿 CZ'));
 });
 
 test('uses NardBadges as the default upstream design', () => {
@@ -96,17 +120,18 @@ test('bare CZ token does not become a verified audio badge (Citizen Vigilante re
   assert.equal(audio.key, 'any');
   assert.equal(audio.verifiedAudio, false);
   assert.equal(audio.evidence, 'bare-language-token');
-  assert.ok(!tags.includes('CZ'));
+  assert.ok(!tags.includes('🇨🇿 CZ'));
   assert.ok(!tags.includes('CZ AUDIO'));
 });
 
-test('CZ next to an audio codec is accepted as verified audio', () => {
+test('CZ next to an audio codec is accepted as verified audio with flag', () => {
   const name = 'Film.2026.1080p.WEB-DL.CZ.AC3.5.1.mkv';
   const audio = detectAudio(name);
   const tags = detectBadgeTags(name, { name, quality: '1080p', audio, ext: 'MKV' });
   assert.equal(audio.key, 'CZ');
   assert.equal(audio.verifiedAudio, true);
   assert.equal(audio.evidence, 'audio-codec');
+  assert.ok(tags.includes('🇨🇿 CZ'));
   assert.ok(tags.includes('CZ AUDIO'));
 });
 
