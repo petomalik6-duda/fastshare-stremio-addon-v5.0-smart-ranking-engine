@@ -121,9 +121,6 @@ async function searchFastshare(term, hash) {
       cache: 'miss',
       ...(res.ok ? {} : { error: `FastShare search HTTP ${res.status}` })
     };
-
-    // Cache only successful responses. A transient 429/5xx must be retried on the
-    // next request rather than poisoning the cache for several minutes.
     if (res.ok) {
       const { cache, ...cacheable } = value;
       setCache(searchCache, cacheKey, cacheable, FASTSHARE_SEARCH_CACHE_TTL_MS, FASTSHARE_SEARCH_CACHE_MAX);
@@ -140,19 +137,20 @@ async function searchFastshare(term, hash) {
 function streamUrl(file, hash) {
   const base = file?.url || file?.raw?.download_url;
   if (!base) return '';
-  const sep = base.includes('?') ? '&' : '?';
-  // Preserve the Kodi API playback format used by the working v6.3.x releases.
-  return `${base}${sep}stream=1&session=${esc(hash)}&${esc(file.name)}`;
+  try {
+    const url = new URL(base);
+    url.searchParams.set('stream', '1');
+    url.searchParams.set('session', String(hash || ''));
+    if (file?.name) url.searchParams.set('filename', String(file.name));
+    return url.toString();
+  } catch {
+    const sep = base.includes('?') ? '&' : '?';
+    return `${base}${sep}stream=1&session=${encodeURIComponent(String(hash || ''))}&filename=${encodeURIComponent(String(file?.name || ''))}`;
+  }
 }
 
 function clearSearchCache() {
   searchCache.clear();
 }
 
-module.exports = {
-  login,
-  searchFastshare,
-  streamUrl,
-  mapFile,
-  clearSearchCache
-};
+module.exports = { login, searchFastshare, streamUrl, mapFile, clearSearchCache };
