@@ -8,17 +8,13 @@ const baseRankFiles = ranking.rankFiles;
 
 function canonicalSeriesNearCollision(fileName, meta, type) {
   if (type !== 'series') return false;
-
   const canonical = normalize(meta?.title || '');
   const canonicalTokens = canonical.split(' ').filter(Boolean);
   if (canonicalTokens.length !== 1) return false;
-
   const expected = canonicalTokens[0];
   if (expected.length < 5) return false;
-
   const fileTokens = normalize(fileName).split(' ').filter(Boolean);
   if (fileTokens.includes(expected)) return false;
-
   return fileTokens.some(actual => {
     if (actual === expected || actual.length < 5) return false;
     if (Math.abs(actual.length - expected.length) > 2) return false;
@@ -30,15 +26,11 @@ function canonicalSeriesNearCollision(fileName, meta, type) {
 
 function explicitMovieYearCollision(fileName, meta, type) {
   if (type !== 'movie') return false;
-
   const expectedMatch = String(meta?.year || meta?.releaseInfo || meta?.raw?.releaseInfo || '').match(/\b(19\d{2}|20\d{2})\b/);
   if (!expectedMatch) return false;
   const expectedYear = Number(expectedMatch[1]);
-
   const years = [...String(fileName || '').matchAll(/\b(19\d{2}|20\d{2})\b/g)].map(match => Number(match[1]));
-  if (!years.length) return false;
-  if (years.includes(expectedYear)) return false;
-
+  if (!years.length || years.includes(expectedYear)) return false;
   const nearestDifference = Math.min(...years.map(year => Math.abs(year - expectedYear)));
   return nearestDifference > 2;
 }
@@ -66,29 +58,22 @@ function movieTitlePrefix(fileName) {
 
 function oneWordMovieAliasCollision(fileName, meta, type) {
   if (type !== 'movie') return false;
-
   const aliases = ranking.getTitleAliases(meta);
   if (!aliases.length) return false;
-
   const candidates = aliases
     .map(alias => ({ alias, normalized: normalize(alias), ...ranking.aliasMatchScore(fileName, alias) }))
     .sort((a, b) => b.score - a.score || b.ratio - a.ratio);
   const best = candidates[0];
-
   if (!best?.strong || !best.strictShortTitle) return false;
-
   const prefix = movieTitlePrefix(fileName);
   if (!prefix) return false;
-
   const exactKnownTitle = aliases.some(alias => normalize(alias) === prefix);
   return !exactKnownTitle;
 }
 
 function guardedRankFiles(files, meta, type) {
   const ranked = baseRankFiles(files, meta, type);
-  if (type === 'series') {
-    return ranked.filter(file => !canonicalSeriesNearCollision(file?.name || '', meta, type));
-  }
+  if (type === 'series') return ranked.filter(file => !canonicalSeriesNearCollision(file?.name || '', meta, type));
   if (type === 'movie') {
     return ranked.filter(file => {
       const name = file?.name || '';
@@ -102,6 +87,7 @@ ranking.rankFiles = guardedRankFiles;
 
 const runtime = require('./unified-server');
 require('./configure-fix')(runtime);
+require('./runtime-fix-v72')(runtime);
 
 runtime.app.get('/deploy-info', (req, res) => {
   res.set('Cache-Control', 'no-store');
@@ -109,7 +95,7 @@ runtime.app.get('/deploy-info', (req, res) => {
     ok: true,
     version: VERSION,
     entrypoint: 'src/entrypoint.js',
-    runtime: 'FastShare+Webshare unified',
+    runtime: 'FastShare+Webshare unified v72',
     configurator: 'server-side',
     renderGitCommit: process.env.RENDER_GIT_COMMIT || null,
     renderServiceName: process.env.RENDER_SERVICE_NAME || null,
