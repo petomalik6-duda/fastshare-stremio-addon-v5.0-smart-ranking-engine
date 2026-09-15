@@ -2,7 +2,7 @@
 
 const ranking = require('./ranking');
 const { normalize, levenshtein, similarity } = require('./utils');
-const { PORT, VERSION } = require('./config');
+const { PORT } = require('./config');
 
 const baseRankFiles = ranking.rankFiles;
 
@@ -96,19 +96,21 @@ providerRuntime.app.get('/deploy-info', (req, res) => {
   res.set('Cache-Control', 'no-store');
   res.json({
     ok: true,
-    version: '7.7.0',
+    version: '7.8.0',
     entrypoint: 'src/entrypoint.js',
-    runtime: 'FastShare+Webshare unified v77',
+    runtime: 'FastShare+Webshare unified v78',
     configurator: 'server-side',
     manifestCompat: true,
     strictDubCatalogs: true,
+    strictSeriesDubEvidence: true,
+    falseDubSeriesBlocklist: true,
     strictStreamAudioLabels: true,
     fastshareUrlNormalized: true,
     combinedProviderStreams: true,
-    streamSort: 'dubbing-desc,size-desc',
-    seriesCatalogCompatibility: true,
-    latestCatalogs: true,
-    concertsCatalog: true,
+    providerBalanced: true,
+    streamSort: 'dubbing-desc,size-desc,provider-balanced',
+    latestCatalogsMultiPage: true,
+    strictConcertsCatalog: true,
     renderGitCommit: process.env.RENDER_GIT_COMMIT || null,
     renderServiceName: process.env.RENDER_SERVICE_NAME || null,
     renderExternalUrl: process.env.RENDER_EXTERNAL_URL || null
@@ -117,7 +119,7 @@ providerRuntime.app.get('/deploy-info', (req, res) => {
 
 function start() {
   return providerRuntime.app.listen(PORT, () => {
-    console.log(`FastShare + Webshare Stremio addon v7.7.0 on ${PORT}`);
+    console.log(`FastShare + Webshare Stremio addon v7.8.0 on ${PORT}`);
   });
 }
 
