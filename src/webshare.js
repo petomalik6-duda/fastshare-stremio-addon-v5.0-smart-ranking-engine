@@ -110,7 +110,7 @@ async function post(endpoint, params, timeoutMs) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-      'Accept': 'text/xml; charset=UTF-8',
+      Accept: 'text/xml; charset=UTF-8',
       'User-Agent': `Stremio FastShare+Webshare/${VERSION}`
     },
     body
@@ -131,24 +131,29 @@ async function login(creds) {
   try {
     const saltResponse = await post('salt', { username_or_email: username }, LOGIN_TIMEOUT_MS);
     if (tag(saltResponse.text, 'status') !== 'OK') {
-      return { ok: false, error: tag(saltResponse.text, 'message') || 'Webshare salt failed' };
+      return { ok: false, stage: 'salt', error: tag(saltResponse.text, 'message') || 'Webshare salt failed' };
     }
     const salt = tag(saltResponse.text, 'salt');
     const passwordHash = crypto.createHash('sha1').update(md5crypt(password, salt)).digest('hex');
-    const digest = crypto.createHash('md5').update(`${username}:Webshare:${passwordHash}`).digest('hex');
-    const loginResponse = await post('login', {
-      username_or_email: username,
-      password: passwordHash,
-      digest,
-      keep_logged_in: 1
-    }, LOGIN_TIMEOUT_MS);
-    if (tag(loginResponse.text, 'status') !== 'OK') {
-      return { ok: false, error: tag(loginResponse.text, 'message') || 'Webshare login failed' };
+
+    const attempts = [
+      { label: 'official', params: { username_or_email: username, password: passwordHash, keep_logged_in: 1 } },
+      { label: 'digest-hash', params: { username_or_email: username, password: passwordHash, digest: crypto.createHash('md5').update(`${username}:Webshare:${passwordHash}`).digest('hex'), keep_logged_in: 1 } },
+      { label: 'digest-plain', params: { username_or_email: username, password: passwordHash, digest: crypto.createHash('md5').update(`${username}:Webshare:${password}`).digest('hex'), keep_logged_in: 1 } }
+    ];
+
+    let lastError = 'Webshare login failed';
+    for (const attempt of attempts) {
+      const loginResponse = await post('login', attempt.params, LOGIN_TIMEOUT_MS);
+      if (tag(loginResponse.text, 'status') === 'OK') {
+        const token = tag(loginResponse.text, 'token');
+        if (!token) return { ok: false, stage: 'login', error: 'Webshare login response has no token' };
+        setCache(authCache, key, { token }, AUTH_CACHE_TTL_MS, AUTH_CACHE_MAX);
+        return { ok: true, token, source: `login-${attempt.label}` };
+      }
+      lastError = tag(loginResponse.text, 'message') || lastError;
     }
-    const token = tag(loginResponse.text, 'token');
-    if (!token) return { ok: false, error: 'Webshare login response has no token' };
-    setCache(authCache, key, { token }, AUTH_CACHE_TTL_MS, AUTH_CACHE_MAX);
-    return { ok: true, token, source: 'login' };
+    return { ok: false, stage: 'login', error: lastError };
   } catch (error) {
     return { ok: false, error: error?.name === 'AbortError' ? 'Webshare login timeout' : String(error.message || error) };
   }
