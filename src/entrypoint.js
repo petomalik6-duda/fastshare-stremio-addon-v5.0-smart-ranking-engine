@@ -96,9 +96,9 @@ providerRuntime.app.get('/deploy-info', (req, res) => {
   res.set('Cache-Control', 'no-store');
   res.json({
     ok: true,
-    version: '7.6.0',
+    version: '7.7.0',
     entrypoint: 'src/entrypoint.js',
-    runtime: 'FastShare+Webshare unified v76',
+    runtime: 'FastShare+Webshare unified v77',
     configurator: 'server-side',
     manifestCompat: true,
     strictDubCatalogs: true,
@@ -107,6 +107,8 @@ providerRuntime.app.get('/deploy-info', (req, res) => {
     combinedProviderStreams: true,
     streamSort: 'dubbing-desc,size-desc',
     seriesCatalogCompatibility: true,
+    latestCatalogs: true,
+    concertsCatalog: true,
     renderGitCommit: process.env.RENDER_GIT_COMMIT || null,
     renderServiceName: process.env.RENDER_SERVICE_NAME || null,
     renderExternalUrl: process.env.RENDER_EXTERNAL_URL || null
@@ -115,7 +117,7 @@ providerRuntime.app.get('/deploy-info', (req, res) => {
 
 function start() {
   return providerRuntime.app.listen(PORT, () => {
-    console.log(`FastShare + Webshare Stremio addon v7.6.0 on ${PORT}`);
+    console.log(`FastShare + Webshare Stremio addon v7.7.0 on ${PORT}`);
   });
 }
 
