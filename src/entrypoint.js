@@ -91,14 +91,15 @@ require('./runtime-fix-v72')(runtime);
 const compatibleRuntime = require('./manifest-compat')(runtime);
 const strictRuntime = require('./strict-audio-fix')(compatibleRuntime);
 const providerRuntime = require('./provider-stream-mode')(strictRuntime);
+const concertRuntime = require('./concert-direct-catalog')(providerRuntime);
 
-providerRuntime.app.get('/deploy-info', (req, res) => {
+concertRuntime.app.get('/deploy-info', (req, res) => {
   res.set('Cache-Control', 'no-store');
   res.json({
     ok: true,
-    version: '7.8.0',
+    version: '7.9.0',
     entrypoint: 'src/entrypoint.js',
-    runtime: 'FastShare+Webshare unified v78',
+    runtime: 'FastShare+Webshare unified v79',
     configurator: 'server-side',
     manifestCompat: true,
     strictDubCatalogs: true,
@@ -107,10 +108,11 @@ providerRuntime.app.get('/deploy-info', (req, res) => {
     strictStreamAudioLabels: true,
     fastshareUrlNormalized: true,
     combinedProviderStreams: true,
+    singleStreamSourceName: true,
     providerBalanced: true,
     streamSort: 'dubbing-desc,size-desc,provider-balanced',
     latestCatalogsMultiPage: true,
-    strictConcertsCatalog: true,
+    providerNativeConcertCatalog: true,
     renderGitCommit: process.env.RENDER_GIT_COMMIT || null,
     renderServiceName: process.env.RENDER_SERVICE_NAME || null,
     renderExternalUrl: process.env.RENDER_EXTERNAL_URL || null
@@ -118,15 +120,15 @@ providerRuntime.app.get('/deploy-info', (req, res) => {
 });
 
 function start() {
-  return providerRuntime.app.listen(PORT, () => {
-    console.log(`FastShare + Webshare Stremio addon v7.8.0 on ${PORT}`);
+  return concertRuntime.app.listen(PORT, () => {
+    console.log(`FastShare + Webshare Stremio addon v7.9.0 on ${PORT}`);
   });
 }
 
 if (require.main === module) start();
 
 module.exports = {
-  ...providerRuntime,
+  ...concertRuntime,
   start,
   canonicalSeriesNearCollision,
   explicitMovieYearCollision,
