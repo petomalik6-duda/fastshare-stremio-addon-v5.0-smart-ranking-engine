@@ -16,6 +16,7 @@ const CATALOG_CACHE_TTL_MS = Number(process.env.CATALOG_CACHE_TTL_MS || 1000 * 6
 const CATALOG_CACHE_MAX = 120;
 const CATALOG_PAGE_SIZE = Math.max(10, Math.min(40, Number(process.env.CATALOG_PAGE_SIZE || 20)));
 const CANDIDATE_LIMIT = Math.max(CATALOG_PAGE_SIZE, Math.min(60, Number(process.env.CATALOG_CANDIDATE_LIMIT || 50)));
+const LOCAL_CANDIDATE_LIMIT = Math.max(30, Math.min(80, Number(process.env.LOCAL_CANDIDATE_LIMIT || 50)));
 const catalogCache = new Map();
 
 const FALSE_DUB_SERIES = new Set([
@@ -26,11 +27,11 @@ const CATALOGS = [
   { id: 'unified-latest-movies', type: 'movie', name: '🆕 Najnovšie dostupné filmy', source: 'latest', requireDub: false },
   { id: 'unified-latest-series', type: 'series', name: '🆕 Najnovšie dostupné seriály', source: 'latest', requireDub: false },
   { id: 'unified-concerts', type: 'movie', name: '🎵 Koncerty', source: 'concerts', requireDub: false },
-  { id: 'unified-czsk-movies', type: 'movie', name: '🇨🇿🇸🇰 CZ/SK dabing – filmy' },
-  { id: 'unified-czsk-series', type: 'series', name: '🇨🇿🇸🇰 CZ/SK dabing – seriály' },
-  { id: 'unified-cz-movies', type: 'movie', name: '🇨🇿 CZ dabing – filmy', audio: 'cz' },
-  { id: 'unified-sk-movies', type: 'movie', name: '🇸🇰 SK dabing – filmy', audio: 'sk' },
-  { id: 'unified-4k-czsk', type: 'movie', name: '🎬 4K CZ/SK dabing', quality: '2160p' }
+  { id: 'unified-czsk-movies', type: 'movie', name: '🇨🇿🇸🇰 CZ/SK dabing + originál – filmy' },
+  { id: 'unified-czsk-series', type: 'series', name: '🇨🇿🇸🇰 CZ/SK dabing + originál – seriály' },
+  { id: 'unified-cz-movies', type: 'movie', name: '🇨🇿 CZ dabing + české filmy', audio: 'cz' },
+  { id: 'unified-sk-movies', type: 'movie', name: '🇸🇰 SK dabing + slovenské filmy', audio: 'sk' },
+  { id: 'unified-4k-czsk', type: 'movie', name: '🎬 4K CZ/SK dabing + originál', quality: '2160p' }
 ];
 
 function catalogDef(id, type) {
@@ -133,24 +134,15 @@ async function fetchTmdbDiscoverPages(type, mode, startPage, pageCount) {
   return payloads.flatMap(data => Array.isArray(data?.results) ? data.results : []);
 }
 
-async function tmdbCandidates(type, skip = 0, mode = 'latest') {
-  if (!tmdbEnabled()) return [];
-  const startPage = Math.floor(Math.max(0, Number(skip || 0)) / 20) + 1;
-  const pageCount = mode === 'concerts' ? 8 : 4;
-  let rows = await fetchTmdbDiscoverPages(type, mode, startPage, pageCount);
-
-  if (mode === 'concerts') {
-    const concertTitleRx = /\b(concert|live\s+(at|in|from)|live$|world\s+tour|tour\s+live|unplugged|festival|live\s+concert|live\s+performance)\b/i;
-    rows = rows.filter(item => concertTitleRx.test(String(item.title || item.name || item.original_title || item.original_name || '')));
-  }
-
+async function mapTmdbItems(type, items, limit = CANDIDATE_LIMIT) {
   const unique = [];
   const seen = new Set();
-  for (const item of rows) {
-    if (!item?.id || seen.has(item.id)) continue;
-    seen.add(item.id);
+  for (const item of items || []) {
+    const uniqueKey = `${item?.id || ''}:${item?._nativeLocale || ''}`;
+    if (!item?.id || seen.has(uniqueKey)) continue;
+    seen.add(uniqueKey);
     unique.push(item);
-    if (unique.length >= CANDIDATE_LIMIT) break;
+    if (unique.length >= limit) break;
   }
 
   const mapped = await mapWithConcurrency(unique, 8, async item => {
@@ -169,14 +161,64 @@ async function tmdbCandidates(type, skip = 0, mode = 'latest') {
         releaseInfo: releaseDate ? releaseDate.slice(0, 4) : '',
         year: releaseDate ? Number(releaseDate.slice(0, 4)) : undefined,
         genres: [],
-        _releaseDate: releaseDate
+        _releaseDate: releaseDate,
+        _nativeLocale: item._nativeLocale || undefined,
+        _tmdbId: item.id
       };
     } catch {
       return null;
     }
   });
 
-  return mapped.filter(Boolean).sort((a, b) => String(b._releaseDate || '').localeCompare(String(a._releaseDate || '')));
+  return mapped.filter(Boolean);
+}
+
+async function tmdbCandidates(type, skip = 0, mode = 'latest') {
+  if (!tmdbEnabled()) return [];
+  const startPage = Math.floor(Math.max(0, Number(skip || 0)) / 20) + 1;
+  const pageCount = mode === 'concerts' ? 8 : 4;
+  let rows = await fetchTmdbDiscoverPages(type, mode, startPage, pageCount);
+
+  if (mode === 'concerts') {
+    const concertTitleRx = /\b(concert|live\s+(at|in|from)|live$|world\s+tour|tour\s+live|unplugged|festival|live\s+concert|live\s+performance)\b/i;
+    rows = rows.filter(item => concertTitleRx.test(String(item.title || item.name || item.original_title || item.original_name || '')));
+  }
+
+  const mapped = await mapTmdbItems(type, rows, CANDIDATE_LIMIT);
+  return mapped.sort((a, b) => String(b._releaseDate || '').localeCompare(String(a._releaseDate || '')));
+}
+
+async function tmdbLocalCandidates(type, skip = 0) {
+  if (!tmdbEnabled()) return [];
+  const isSeries = type === 'series';
+  const path = isSeries ? '/discover/tv' : '/discover/movie';
+  const startPage = Math.floor(Math.max(0, Number(skip || 0)) / 20) + 1;
+  const pages = [startPage, startPage + 1];
+  const locales = [
+    { language: 'cs', country: 'CZ', nativeLocale: 'cz' },
+    { language: 'sk', country: 'SK', nativeLocale: 'sk' }
+  ];
+  const requests = [];
+  for (const locale of locales) {
+    for (const page of pages) requests.push({ ...locale, page });
+  }
+
+  const payloads = await mapWithConcurrency(requests, 4, req => {
+    const params = {
+      language: req.nativeLocale === 'cz' ? 'cs-CZ' : 'sk-SK',
+      page: req.page,
+      include_adult: 'false',
+      sort_by: isSeries ? 'first_air_date.desc' : 'primary_release_date.desc',
+      with_original_language: req.language,
+      with_origin_country: req.country
+    };
+    return fetchJson(tmdbUrl(path, params), { headers: tmdbHeaders() })
+      .then(data => (Array.isArray(data?.results) ? data.results : []).map(item => ({ ...item, _nativeLocale: req.nativeLocale })));
+  });
+
+  const rows = payloads.flat();
+  const mapped = await mapTmdbItems(type, rows, LOCAL_CANDIDATE_LIMIT);
+  return mapped.sort((a, b) => String(b._releaseDate || '').localeCompare(String(a._releaseDate || '')));
 }
 
 async function cinemetaCandidates(type, skip = 0, pages = 1) {
@@ -186,6 +228,23 @@ async function cinemetaCandidates(type, skip = 0, pages = 1) {
     { headers: { 'User-Agent': `FastShare-Webshare/${VERSION}` } }
   ));
   return payloads.flatMap(payload => Array.isArray(payload?.metas) ? payload.metas : []).slice(0, CANDIDATE_LIMIT);
+}
+
+function mergeCandidates(local, global, limit = 80) {
+  const out = [];
+  const seen = new Set();
+  const push = item => {
+    const id = String(item?.id || '');
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    out.push(item);
+  };
+  const max = Math.max(local?.length || 0, global?.length || 0);
+  for (let i = 0; i < max && out.length < limit; i++) {
+    if (local?.[i]) push(local[i]);
+    if (global?.[i]) push(global[i]);
+  }
+  return out;
 }
 
 async function catalogCandidates(type, def, skip) {
@@ -202,7 +261,12 @@ async function catalogCandidates(type, def, skip) {
     const titleRx = /\b(concert|live\s+(at|in|from)|world\s+tour|tour\s+live|unplugged|festival)\b/i;
     return fallback.filter(item => titleRx.test(String(item.name || ''))).slice(0, CANDIDATE_LIMIT);
   }
-  return cinemetaCandidates(type, skip, 1);
+
+  const [local, global] = await Promise.all([
+    tmdbLocalCandidates(type, skip),
+    cinemetaCandidates(type, skip, 1)
+  ]);
+  return mergeCandidates(local, global, Math.max(80, CANDIDATE_LIMIT));
 }
 
 function providerCreds(config) {
@@ -244,7 +308,15 @@ function strictSeriesTitleEvidence(file, meta) {
   return /\bS\d{1,2}(?:E\d{1,3})?\b|\b\d{1,2}x\d{1,3}\b|\bseason\s*\d{1,2}\b|\bseria\s*\d{1,2}\b/i.test(raw);
 }
 
-async function availabilityForMeta(meta, type, def, auth) {
+function nativeLocaleAllowed(base, def) {
+  const locale = String(base?._nativeLocale || '').toLowerCase();
+  if (!['cz', 'sk'].includes(locale)) return false;
+  if (def.audio === 'cz') return locale === 'cz';
+  if (def.audio === 'sk') return locale === 'sk';
+  return true;
+}
+
+async function availabilityForMeta(meta, type, def, auth, base = null) {
   const imdbId = String(meta?.imdbId || meta?.id || '').split(':')[0];
   if (type === 'series' && def.requireDub !== false && FALSE_DUB_SERIES.has(imdbId)) return null;
 
@@ -265,7 +337,8 @@ async function availabilityForMeta(meta, type, def, auth) {
     .filter(file => qualityMatches(file, def.quality || null));
 
   if (def.requireDub !== false) {
-    ranked = ranked.filter(file => hasCzSkAudio(file, def.audio || null));
+    const nativeLocal = nativeLocaleAllowed(base, def);
+    if (!nativeLocal) ranked = ranked.filter(file => hasCzSkAudio(file, def.audio || null));
     if (type === 'series') {
       ranked = ranked.filter(file => strictSeriesTitleEvidence(file, meta));
       const uniqueNames = new Set(ranked.map(file => normalize(file.name || '')));
@@ -301,11 +374,18 @@ function metaToCatalogItem(base, match, type, def, meta) {
     behaviorHints
   };
 
-  const prefix = def.source === 'concerts'
-    ? `Koncert dostupný cez ${match?.provider === 'fastshare' ? 'FastShare' : 'Webshare'}.`
-    : def.source === 'latest'
-      ? `Dostupné cez ${match?.provider === 'fastshare' ? 'FastShare' : 'Webshare'}.`
-      : `Explicitný CZ/SK dub marker nájdený cez ${match?.provider === 'fastshare' ? 'FastShare' : 'Webshare'}.`;
+  let prefix;
+  if (base?._nativeLocale === 'cz') {
+    prefix = `Český originál dostupný cez ${match?.provider === 'fastshare' ? 'FastShare' : 'Webshare'}.`;
+  } else if (base?._nativeLocale === 'sk') {
+    prefix = `Slovenský originál dostupný cez ${match?.provider === 'fastshare' ? 'FastShare' : 'Webshare'}.`;
+  } else if (def.source === 'concerts') {
+    prefix = `Koncert dostupný cez ${match?.provider === 'fastshare' ? 'FastShare' : 'Webshare'}.`;
+  } else if (def.source === 'latest') {
+    prefix = `Dostupné cez ${match?.provider === 'fastshare' ? 'FastShare' : 'Webshare'}.`;
+  } else {
+    prefix = `Explicitný CZ/SK dub marker nájdený cez ${match?.provider === 'fastshare' ? 'FastShare' : 'Webshare'}.`;
+  }
 
   item.description = [prefix, base.description || ''].filter(Boolean).join(' ');
   return item;
@@ -315,7 +395,7 @@ async function buildCatalog({ type, id, skip = 0, config, configKey = '' }) {
   const def = catalogDef(id, type);
   if (!def) return { metas: [] };
   const normalizedSkip = Math.max(0, Number(skip || 0));
-  const cacheKey = `catalog-v9:${configKey}:${type}:${id}:${normalizedSkip}`;
+  const cacheKey = `catalog-v10:${configKey}:${type}:${id}:${normalizedSkip}`;
   const cached = getFreshCache(catalogCache, cacheKey, CATALOG_CACHE_TTL_MS);
   if (cached) return { ...cached, cache: 'hit' };
 
@@ -326,7 +406,7 @@ async function buildCatalog({ type, id, skip = 0, config, configKey = '' }) {
   const checked = await mapWithConcurrency(candidates, 4, async base => {
     try {
       const meta = await getMeta(type, base.id);
-      const match = await availabilityForMeta(meta, type, def, auth);
+      const match = await availabilityForMeta(meta, type, def, auth, base);
       return match ? metaToCatalogItem(base, match, type, def, meta) : null;
     } catch {
       return null;
@@ -338,9 +418,10 @@ async function buildCatalog({ type, id, skip = 0, config, configKey = '' }) {
     metas,
     auth: { fastshare: auth.fastshare.ok, webshare: auth.webshare.ok },
     generatedAt: new Date().toISOString(),
-    source: def.source || 'cinemeta',
+    source: def.source || 'cinemeta+tmdb-local',
     tmdbEnabled: tmdbEnabled(),
     candidates: candidates.length,
+    localCandidates: candidates.filter(item => item?._nativeLocale).length,
     cache: 'miss'
   };
   setCache(catalogCache, cacheKey, value, CATALOG_CACHE_TTL_MS, CATALOG_CACHE_MAX);
@@ -356,6 +437,8 @@ module.exports = {
   strictDubLanguage,
   strictSeriesTitleEvidence,
   preferredLocalizedTitle,
+  nativeLocaleAllowed,
   tmdbCandidates,
+  tmdbLocalCandidates,
   catalogCandidates
 };
