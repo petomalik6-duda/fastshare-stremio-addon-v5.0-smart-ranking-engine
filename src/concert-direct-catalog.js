@@ -2,13 +2,16 @@
 
 const { login: fastshareLogin, searchFastshare } = require('./fastshare');
 const { login: webshareLogin, searchWebshare } = require('./webshare');
-const { mapWithConcurrency, normalize } = require('./utils');
+const { mapWithConcurrency, normalize, fetchJson } = require('./utils');
+const { TMDB_API_KEY, TMDB_READ_ACCESS_TOKEN, VERSION } = require('./config');
 
 const TERMS = ['concert', 'live concert', 'world tour', 'unplugged', 'festival', 'live at', 'live in'];
 const CONCERT_RX = /\b(concert|live\s+(at|in|from)|world\s+tour|tour\s+live|unplugged|festival|live\s+concert|live\s+performance)\b/i;
 const VIDEO_RX = /\.(mkv|mp4|avi|mov|m4v)(?:$|[?\s])/i;
 const cache = new Map();
+const metaCache = new Map();
 const TTL = 10 * 60 * 1000;
+const META_TTL = 6 * 60 * 60 * 1000;
 
 function encodeConcertId(title) {
   return `concert:${Buffer.from(String(title || '').slice(0, 180), 'utf8').toString('base64url')}`;
@@ -45,6 +48,111 @@ function getCached(key) {
 function setCached(key, value) {
   cache.set(key, { at: Date.now(), value });
   if (cache.size > 50) cache.delete(cache.keys().next().value);
+}
+
+function tmdbEnabled() {
+  return Boolean(TMDB_API_KEY || TMDB_READ_ACCESS_TOKEN);
+}
+function tmdbHeaders() {
+  if (TMDB_READ_ACCESS_TOKEN) {
+    return { Authorization: `Bearer ${TMDB_READ_ACCESS_TOKEN}`, Accept: 'application/json', 'User-Agent': `FastShare-Webshare/${VERSION}` };
+  }
+  return { Accept: 'application/json', 'User-Agent': `FastShare-Webshare/${VERSION}` };
+}
+function tmdbUrl(path, params = {}) {
+  const url = new URL(`https://api.themoviedb.org/3${path}`);
+  if (TMDB_API_KEY) url.searchParams.set('api_key', TMDB_API_KEY);
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, String(value));
+  }
+  return url.toString();
+}
+
+function concertQuery(title) {
+  return String(title || '')
+    .replace(/\b(19\d{2}|20\d{2})\b/g, ' ')
+    .replace(/\b(2160p|1080p|720p|4k|uhd|hdr)\b/ig, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function titleSimilarity(a, b) {
+  const aa = normalize(a);
+  const bb = normalize(b);
+  if (!aa || !bb) return 0;
+  if (aa === bb) return 100;
+  if (aa.includes(bb) || bb.includes(aa)) return 85;
+  const at = new Set(aa.split(' ').filter(x => x.length > 2));
+  const bt = new Set(bb.split(' ').filter(x => x.length > 2));
+  if (!at.size || !bt.size) return 0;
+  const overlap = [...at].filter(x => bt.has(x)).length;
+  return Math.round(100 * overlap / Math.max(at.size, bt.size));
+}
+
+async function enrichConcert(item) {
+  const key = normalize(item.title || item.filename || '');
+  const cached = metaCache.get(key);
+  if (cached && Date.now() - cached.at < META_TTL) return cached.value;
+
+  const year = String(item.title || item.filename || '').match(/\b(19\d{2}|20\d{2})\b/)?.[0] || '';
+  const fallback = {
+    ...item,
+    id: encodeConcertId(item.title),
+    name: item.title,
+    releaseInfo: year,
+    description: `Koncert nájdený priamo na ${item.provider}. Zdroj: ${item.filename}`,
+    genres: ['Music'],
+    poster: undefined,
+    background: undefined,
+    imdbRating: undefined,
+    tmdbId: undefined,
+    imdbId: undefined
+  };
+
+  if (!tmdbEnabled()) {
+    metaCache.set(key, { at: Date.now(), value: fallback });
+    return fallback;
+  }
+
+  try {
+    const query = concertQuery(item.title);
+    const search = await fetchJson(tmdbUrl('/search/movie', { query, language: 'cs-CZ', include_adult: 'false' }), { headers: tmdbHeaders() });
+    const rows = Array.isArray(search?.results) ? search.results : [];
+    const ranked = rows.map(row => {
+      const name = row.title || row.original_title || '';
+      let score = titleSimilarity(query, name);
+      const rowYear = String(row.release_date || '').slice(0, 4);
+      if (year && rowYear === year) score += 20;
+      if (/\b(concert|live|tour|unplugged|festival|performance)\b/i.test(name)) score += 15;
+      return { row, score };
+    }).sort((a, b) => b.score - a.score);
+
+    const best = ranked[0];
+    if (!best || best.score < 55) {
+      metaCache.set(key, { at: Date.now(), value: fallback });
+      return fallback;
+    }
+
+    const detail = await fetchJson(tmdbUrl(`/movie/${best.row.id}`, { language: 'cs-CZ', append_to_response: 'external_ids' }), { headers: tmdbHeaders() });
+    const value = {
+      ...fallback,
+      name: detail.title || best.row.title || item.title,
+      releaseInfo: String(detail.release_date || best.row.release_date || '').slice(0, 4) || year,
+      description: detail.overview || fallback.description,
+      poster: detail.poster_path ? `https://image.tmdb.org/t/p/w500${detail.poster_path}` : undefined,
+      background: detail.backdrop_path ? `https://image.tmdb.org/t/p/original${detail.backdrop_path}` : undefined,
+      imdbRating: Number(detail.vote_average || 0) ? String(Number(detail.vote_average).toFixed(1)) : undefined,
+      genres: Array.isArray(detail.genres) && detail.genres.length ? detail.genres.map(g => g.name) : ['Music'],
+      runtime: Number(detail.runtime || 0) ? `${detail.runtime} min` : undefined,
+      tmdbId: detail.id,
+      imdbId: detail.external_ids?.imdb_id || undefined
+    };
+    metaCache.set(key, { at: Date.now(), value });
+    return value;
+  } catch {
+    metaCache.set(key, { at: Date.now(), value: fallback });
+    return fallback;
+  }
 }
 
 async function discover(runtime, req) {
@@ -110,16 +218,22 @@ function install(runtime) {
       const all = await discover(runtime, req);
       const skip = skipOf(req.params.extra);
       const page = all.slice(skip, skip + 40);
-      const metas = page.map(item => ({
+      const enriched = await mapWithConcurrency(page, 5, enrichConcert);
+      const metas = enriched.map(item => ({
         id: encodeConcertId(item.title),
         type: 'movie',
-        name: item.title,
-        description: `Koncert nájdený priamo na ${item.provider}. ${item.filename}`,
-        releaseInfo: String(item.title.match(/\b(19\d{2}|20\d{2})\b/)?.[0] || ''),
+        name: item.name || item.title,
+        poster: item.poster,
+        background: item.background,
+        description: item.description,
+        releaseInfo: item.releaseInfo,
+        imdbRating: item.imdbRating,
+        genres: item.genres,
+        runtime: item.runtime,
         behaviorHints: { defaultVideoId: encodeConcertId(item.title) }
       }));
       res.set('Cache-Control', 'private, max-age=300');
-      console.log('[concert-catalog-direct]', JSON.stringify({ total: all.length, skip, count: metas.length }));
+      console.log('[concert-catalog-direct]', JSON.stringify({ total: all.length, skip, count: metas.length, enriched: metas.filter(m => m.poster || m.background).length }));
       res.json({ metas });
     } catch (error) {
       console.error('[concert-catalog-error]', String(error?.message || error));
@@ -130,13 +244,19 @@ function install(runtime) {
   async function sendMeta(req, res) {
     const title = decodeConcertId(req.params.id);
     if (title) {
-      const year = title.match(/\b(19\d{2}|20\d{2})\b/)?.[0] || '';
+      const fakeItem = { title, filename: title, provider: 'FastShare/Webshare', size: 0 };
+      const meta = await enrichConcert(fakeItem);
       return res.json({ meta: {
         id: req.params.id,
         type: 'movie',
-        name: title,
-        releaseInfo: year,
-        description: 'Koncert nájdený priamo vo FastShare/Webshare katalógu.'
+        name: meta.name || title,
+        poster: meta.poster,
+        background: meta.background,
+        releaseInfo: meta.releaseInfo,
+        description: meta.description,
+        imdbRating: meta.imdbRating,
+        genres: meta.genres,
+        runtime: meta.runtime
       }});
     }
     try {
@@ -160,7 +280,7 @@ function install(runtime) {
   app.get('/meta/:type/:id.json', sendMeta);
   app.get('/:config/meta/:type/:id.json', sendMeta);
 
-  return { ...runtime, encodeConcertId, decodeConcertId, discoverConcerts: discover };
+  return { ...runtime, encodeConcertId, decodeConcertId, discoverConcerts: discover, enrichConcert };
 }
 
 module.exports = install;
