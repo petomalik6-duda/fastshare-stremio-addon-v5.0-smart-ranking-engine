@@ -75,17 +75,11 @@ function oneWordMovieAliasCollision(fileName, meta, type) {
     .sort((a, b) => b.score - a.score || b.ratio - a.ratio);
   const best = candidates[0];
 
-  // Only tighten candidates whose winning title evidence is a one-word alias.
-  // Multi-word titles keep the normal ranking path.
   if (!best?.strong || !best.strictShortTitle) return false;
 
   const prefix = movieTitlePrefix(fileName);
   if (!prefix) return false;
 
-  // A valid release title must equal one complete known alias before technical
-  // release tags/year begin. This blocks cases such as "Stříbrná vzpoura" or
-  // "Vzpoura na Bounty" from matching the one-word alias "Vzpoura" while still
-  // keeping Mutiny/Vzpoura/Vzbura releases with normal release suffixes.
   const exactKnownTitle = aliases.some(alias => normalize(alias) === prefix);
   return !exactKnownTitle;
 }
@@ -106,7 +100,7 @@ function guardedRankFiles(files, meta, type) {
 
 ranking.rankFiles = guardedRankFiles;
 
-const runtime = require('./server');
+const runtime = require('./unified-server');
 
 runtime.app.get('/deploy-info', (req, res) => {
   res.set('Cache-Control', 'no-store');
@@ -114,6 +108,7 @@ runtime.app.get('/deploy-info', (req, res) => {
     ok: true,
     version: VERSION,
     entrypoint: 'src/entrypoint.js',
+    runtime: 'FastShare+Webshare unified',
     renderGitCommit: process.env.RENDER_GIT_COMMIT || null,
     renderServiceName: process.env.RENDER_SERVICE_NAME || null,
     renderExternalUrl: process.env.RENDER_EXTERNAL_URL || null
@@ -122,7 +117,7 @@ runtime.app.get('/deploy-info', (req, res) => {
 
 function start() {
   return runtime.app.listen(PORT, () => {
-    console.log(`FastShare Stremio addon v${VERSION} on ${PORT} (guarded entrypoint)`);
+    console.log(`FastShare + Webshare Stremio addon v${VERSION} on ${PORT}`);
   });
 }
 
