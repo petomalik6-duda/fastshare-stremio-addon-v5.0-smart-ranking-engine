@@ -14,10 +14,10 @@ function installManifestCompat(runtime) {
 
   function manifest(configToken = null) {
     return {
-      id: 'community.fastshare.webshare.unified.v711',
-      version: '7.11.0',
+      id: 'community.fastshare.webshare.unified.v712',
+      version: '7.12.0',
       name: 'FastShare + Webshare',
-      description: 'Unified FastShare/Webshare streams with concerts based on the configured reference catalog and enriched with TMDB/Wikipedia/CSFD links.',
+      description: 'Unified FastShare/Webshare streams with reference concerts matched by external IDs, source filenames, TMDB, Wikipedia and CSFD links.',
       logo: 'https://www.stremio.com/website/stremio-logo-small.png',
       resources: ['catalog', 'meta', 'stream'],
       types: ['movie', 'series'],
