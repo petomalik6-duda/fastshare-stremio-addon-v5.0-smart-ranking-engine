@@ -4,6 +4,7 @@ const runtime = require('./server');
 const { VERSION, MAX_STREAMS, PRIMARY_MATCH_TARGET, SEARCH_CONCURRENCY } = require('./config');
 const { mapWithConcurrency, bytesToHuman } = require('./utils');
 const { login: webshareLogin, searchWebshare, streamUrl: webshareStreamUrl } = require('./webshare');
+const { CATALOGS, buildCatalog } = require('./catalogs');
 
 const app = runtime.app;
 
@@ -35,11 +36,19 @@ function manifest(configToken = null) {
     id: 'community.fastshare.webshare.unified.v7',
     version: VERSION,
     name: 'FastShare + Webshare',
-    description: 'Unified FastShare and Webshare stream addon with shared metadata matching and ranking.',
+    description: 'Unified FastShare and Webshare addon with CZ/SK availability catalogs and shared stream ranking.',
     logo: 'https://www.stremio.com/website/stremio-logo-small.png',
-    resources: [{ name: 'stream', types: ['movie', 'series'], idPrefixes: ['tt', ''] }],
+    resources: [
+      { name: 'stream', types: ['movie', 'series'], idPrefixes: ['tt', ''] },
+      { name: 'catalog', types: ['movie', 'series'], idPrefixes: ['tt'] }
+    ],
     types: ['movie', 'series'],
-    catalogs: [],
+    catalogs: CATALOGS.map(item => ({
+      id: item.id,
+      type: item.type,
+      name: item.name,
+      extra: [{ name: 'skip', isRequired: false }]
+    })),
     idPrefixes: ['tt'],
     behaviorHints: { configurable: true, configurationRequired: !configToken },
     config: [
@@ -67,6 +76,8 @@ function removeRoutes(paths) {
 removeRoutes([
   '/', '/health', '/manifest.json', '/:config/manifest.json', '/configure',
   '/stream/:type/:id.json', '/:config/stream/:type/:id.json',
+  '/catalog/:type/:id.json', '/catalog/:type/:id/:extra.json',
+  '/:config/catalog/:type/:id.json', '/:config/catalog/:type/:id/:extra.json',
   '/debug/stream/:type/:id.json', '/:config/debug/stream/:type/:id.json',
   '/debug/login', '/:config/debug/login', '/debug/search', '/:config/debug/search'
 ]);
@@ -175,13 +186,44 @@ async function buildUnifiedResponse(req, debug = false) {
   };
 }
 
+function parseSkip(extra) {
+  if (!extra) return 0;
+  try {
+    const decoded = decodeURIComponent(extra);
+    const params = new URLSearchParams(decoded);
+    return Math.max(0, Number(params.get('skip') || 0));
+  } catch {
+    return 0;
+  }
+}
+
+async function sendCatalog(req, res) {
+  const config = unifiedConfig(req);
+  const configKey = req.params.config || [config.fastshare.username, config.webshare.username].filter(Boolean).join('|');
+  const skip = parseSkip(req.params.extra);
+  try {
+    const result = await buildCatalog({
+      type: req.params.type,
+      id: req.params.id,
+      skip,
+      config,
+      configKey
+    });
+    res.set('Cache-Control', 'private, max-age=300');
+    res.json({ metas: result.metas || [] });
+  } catch (error) {
+    res.json({ metas: [] });
+  }
+}
+
 app.get('/', (req, res) => res.redirect('/configure'));
 app.get('/health', (req, res) => res.json({
   ok: true,
   version: VERSION,
   addon: 'FastShare + Webshare',
   providers: ['fastshare', 'webshare'],
-  architecture: 'unified-v7',
+  catalogs: CATALOGS.map(item => item.id),
+  architecture: 'unified-v7-catalogs',
   searchMode: 'parallel-two-stage'
 }));
 
@@ -193,7 +235,7 @@ app.get('/:config/manifest.json', (req, res) => {
 
 app.get('/configure', (req, res) => {
   const base = publicBaseUrl(req);
-  res.type('html').send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>FastShare + Webshare</title><style>body{font-family:Arial,sans-serif;max-width:760px;margin:40px auto;padding:0 16px;background:#111;color:#eee}input,button{font-size:16px;padding:12px;border-radius:8px;border:1px solid #444;background:#222;color:#fff;width:100%;box-sizing:border-box;margin:8px 0}button{background:#1976d2;cursor:pointer}.box{background:#1b1b1b;padding:18px;border-radius:12px;margin:12px 0}.warn{color:#ffd166}.ok{color:#8ee59b}textarea{width:100%;min-height:92px;background:#0b0b0b;color:#9cdcfe;border:1px solid #444;border-radius:8px;padding:10px;box-sizing:border-box}a{color:#8ab4ff}</style></head><body><h1>FastShare + Webshare v${VERSION}</h1><div class="box"><h2>FastShare</h2><input id="fsu" placeholder="FastShare username"><input id="fsp" type="password" placeholder="FastShare password"><h2>Webshare</h2><input id="wsu" placeholder="Webshare username alebo e-mail"><input id="wsp" type="password" placeholder="Webshare password"><button id="go">Vygenerovať addon URL</button><p>Stačí vyplniť aspoň jednu službu; pri vyplnení oboch addon hľadá paralelne na FastShare aj Webshare.</p><p class="warn">Vygenerovanú URL nezdieľaj. Obsahuje zakódované prihlasovacie údaje.</p><div id="out"></div></div><script>(function(){var BASE=${JSON.stringify(base)};function enc(s){var b=new TextEncoder().encode(s),x='';for(var i=0;i<b.length;i++)x+=String.fromCharCode(b[i]);return btoa(x).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}function h(s){return String(s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}document.getElementById('go').onclick=function(){var cfg={username:document.getElementById('fsu').value.trim(),password:document.getElementById('fsp').value,webshareUsername:document.getElementById('wsu').value.trim(),websharePassword:document.getElementById('wsp').value};if(!(cfg.username&&cfg.password)&&!(cfg.webshareUsername&&cfg.websharePassword)){document.getElementById('out').innerHTML='<p class="warn">Vyplň kompletné prihlásenie aspoň pre jednu službu.</p>';return}var token=enc(JSON.stringify(cfg));var url=BASE+'/'+token+'/manifest.json';var st='stremio://'+url.replace(/^https?:\/\//,'');document.getElementById('out').innerHTML='<p class="ok"><b>Addon URL je pripravená.</b></p><textarea readonly onclick="this.select()">'+h(url)+'</textarea><p><a href="'+h(st)+'">Install do Stremia</a></p><p><a target="_blank" href="'+h(url)+'">Otvoriť manifest</a></p>'}})();</script></body></html>`);
+  res.type('html').send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>FastShare + Webshare</title><style>body{font-family:Arial,sans-serif;max-width:760px;margin:40px auto;padding:0 16px;background:#111;color:#eee}input,button{font-size:16px;padding:12px;border-radius:8px;border:1px solid #444;background:#222;color:#fff;width:100%;box-sizing:border-box;margin:8px 0}button{background:#1976d2;cursor:pointer}.box{background:#1b1b1b;padding:18px;border-radius:12px;margin:12px 0}.warn{color:#ffd166}.ok{color:#8ee59b}textarea{width:100%;min-height:92px;background:#0b0b0b;color:#9cdcfe;border:1px solid #444;border-radius:8px;padding:10px;box-sizing:border-box}a{color:#8ab4ff}</style></head><body><h1>FastShare + Webshare v${VERSION}</h1><div class="box"><h2>FastShare</h2><input id="fsu" placeholder="FastShare username"><input id="fsp" type="password" placeholder="FastShare password"><h2>Webshare</h2><input id="wsu" placeholder="Webshare username alebo e-mail"><input id="wsp" type="password" placeholder="Webshare password"><button id="go">Vygenerovať addon URL</button><p>Stačí vyplniť aspoň jednu službu; pri vyplnení oboch addon hľadá paralelne na FastShare aj Webshare.</p><p><b>Katalógy:</b> CZ/SK filmy, CZ/SK seriály, CZ filmy, SK filmy a 4K CZ/SK. Do katalógu sa zaradia iba tituly, pri ktorých addon nájde zodpovedajúci stream.</p><p class="warn">Vygenerovanú URL nezdieľaj. Obsahuje zakódované prihlasovacie údaje.</p><div id="out"></div></div><script>(function(){var BASE=${JSON.stringify(base)};function enc(s){var b=new TextEncoder().encode(s),x='';for(var i=0;i<b.length;i++)x+=String.fromCharCode(b[i]);return btoa(x).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}function h(s){return String(s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}document.getElementById('go').onclick=function(){var cfg={username:document.getElementById('fsu').value.trim(),password:document.getElementById('fsp').value,webshareUsername:document.getElementById('wsu').value.trim(),websharePassword:document.getElementById('wsp').value};if(!(cfg.username&&cfg.password)&&!(cfg.webshareUsername&&cfg.websharePassword)){document.getElementById('out').innerHTML='<p class="warn">Vyplň kompletné prihlásenie aspoň pre jednu službu.</p>';return}var token=enc(JSON.stringify(cfg));var url=BASE+'/'+token+'/manifest.json';var st='stremio://'+url.replace(/^https?:\/\//,'');document.getElementById('out').innerHTML='<p class="ok"><b>Addon URL je pripravená.</b></p><textarea readonly onclick="this.select()">'+h(url)+'</textarea><p><a href="'+h(st)+'">Install do Stremia</a></p><p><a target="_blank" href="'+h(url)+'">Otvoriť manifest</a></p>'}})();</script></body></html>`);
 });
 
 app.post('/configure', (req, res) => {
@@ -203,6 +245,11 @@ app.post('/configure', (req, res) => {
   });
   res.redirect(`/${token}/manifest.json`);
 });
+
+app.get('/catalog/:type/:id.json', sendCatalog);
+app.get('/catalog/:type/:id/:extra.json', sendCatalog);
+app.get('/:config/catalog/:type/:id.json', sendCatalog);
+app.get('/:config/catalog/:type/:id/:extra.json', sendCatalog);
 
 app.get('/stream/:type/:id.json', async (req, res) => {
   try { res.json(await buildUnifiedResponse(req, false)); } catch { res.json({ streams: [] }); }
@@ -232,4 +279,4 @@ app.get('/:config/debug/webshare-search', async (req, res) => {
   res.json({ ok: true, version: VERSION, auth: { ok: true, source: auth.source }, ...result });
 });
 
-module.exports = { ...runtime, app, manifest, unifiedConfig, buildUnifiedResponse, buildWebshareStreams };
+module.exports = { ...runtime, app, manifest, unifiedConfig, buildUnifiedResponse, buildWebshareStreams, sendCatalog };
