@@ -14,10 +14,10 @@ function installManifestCompat(runtime) {
 
   function manifest(configToken = null) {
     return {
-      id: 'community.fastshare.webshare.unified.v713',
-      version: '7.13.0',
+      id: 'community.fastshare.webshare.unified.v714',
+      version: '7.14.0',
       name: 'FastShare + Webshare',
-      description: 'Unified FastShare/Webshare streams with Czech-first, Slovak-second localized movie and series titles plus reference concert metadata matching.',
+      description: 'Unified FastShare/Webshare streams with native Czech and Slovak movies/series merged into CZ/SK catalogs, localized titles and reference concert metadata matching.',
       logo: 'https://www.stremio.com/website/stremio-logo-small.png',
       resources: ['catalog', 'meta', 'stream'],
       types: ['movie', 'series'],
