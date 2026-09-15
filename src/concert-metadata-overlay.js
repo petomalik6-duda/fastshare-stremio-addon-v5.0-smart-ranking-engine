@@ -22,9 +22,10 @@ function install(runtime) {
 
   function needsFallback(meta) {
     if (!meta) return true;
-    if (meta.poster || meta.background) return false;
-    const d = String(meta.description || '');
-    return !d || /^Koncert nájdený priamo/i.test(d);
+    const description = String(meta.description || '');
+    const hasUsefulDescription = Boolean(description) && !/^Koncert nájdený priamo/i.test(description) && !/^Živý koncert\b/i.test(description);
+    const hasVisual = Boolean(meta.poster || meta.background);
+    return !hasUsefulDescription || !hasVisual;
   }
 
   async function enrichWithFallback(item) {
@@ -36,11 +37,13 @@ function install(runtime) {
       return {
         ...base,
         name: base?.name || wiki.name || item.title,
-        description: wiki.description || base?.description,
-        poster: wiki.poster || base?.poster,
-        background: wiki.background || base?.background,
-        links: wiki.links || base?.links,
-        metadataSource: wiki.source
+        description: (!base?.description || /^Koncert nájdený priamo/i.test(base.description) || /^Živý koncert\b/i.test(base.description))
+          ? (wiki.description || base?.description)
+          : base.description,
+        poster: base?.poster || wiki.poster,
+        background: base?.background || wiki.background || wiki.poster,
+        links: [...(base?.links || []), ...(wiki.links || [])],
+        metadataSource: [base?.metadataSource, wiki.source].filter(Boolean).join('+') || wiki.source
       };
     } catch {
       return base;
@@ -122,7 +125,11 @@ function install(runtime) {
   app.get('/meta/:type/:id.json', sendMeta);
   app.get('/:config/meta/:type/:id.json', sendMeta);
 
-  return { ...runtime, enrichConcertWithFallback: enrichWithFallback };
+  return {
+    ...runtime,
+    enrichConcertWithFallback: enrichWithFallback,
+    enrichConcertWithWikipedia: enrichWithFallback
+  };
 }
 
 module.exports = install;
