@@ -90,19 +90,24 @@ require('./configure-fix')(runtime);
 require('./runtime-fix-v72')(runtime);
 const compatibleRuntime = require('./manifest-compat')(runtime);
 const strictRuntime = require('./strict-audio-fix')(compatibleRuntime);
+const providerRuntime = require('./provider-stream-mode')(strictRuntime);
 
-strictRuntime.app.get('/deploy-info', (req, res) => {
+providerRuntime.app.get('/deploy-info', (req, res) => {
   res.set('Cache-Control', 'no-store');
   res.json({
     ok: true,
-    version: '7.4.0',
+    version: '7.5.0',
     entrypoint: 'src/entrypoint.js',
-    runtime: 'FastShare+Webshare unified v74',
+    runtime: 'FastShare+Webshare unified v75',
     configurator: 'server-side',
     manifestCompat: true,
     strictDubCatalogs: true,
     strictStreamAudioLabels: true,
     fastshareUrlNormalized: true,
+    singleProviderStreams: true,
+    streamProviderPriority: 'fastshare-then-webshare',
+    streamSort: 'size-desc',
+    seriesCatalogCompatibility: true,
     renderGitCommit: process.env.RENDER_GIT_COMMIT || null,
     renderServiceName: process.env.RENDER_SERVICE_NAME || null,
     renderExternalUrl: process.env.RENDER_EXTERNAL_URL || null
@@ -110,15 +115,15 @@ strictRuntime.app.get('/deploy-info', (req, res) => {
 });
 
 function start() {
-  return strictRuntime.app.listen(PORT, () => {
-    console.log(`FastShare + Webshare Stremio addon v7.4.0 on ${PORT}`);
+  return providerRuntime.app.listen(PORT, () => {
+    console.log(`FastShare + Webshare Stremio addon v7.5.0 on ${PORT}`);
   });
 }
 
 if (require.main === module) start();
 
 module.exports = {
-  ...strictRuntime,
+  ...providerRuntime,
   start,
   canonicalSeriesNearCollision,
   explicitMovieYearCollision,
