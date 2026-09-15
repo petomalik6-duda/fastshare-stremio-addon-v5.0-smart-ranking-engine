@@ -14,10 +14,10 @@ function installManifestCompat(runtime) {
 
   function manifest(configToken = null) {
     return {
-      id: 'community.fastshare.webshare.unified.v74',
-      version: '7.4.0',
+      id: 'community.fastshare.webshare.unified.v75',
+      version: '7.5.0',
       name: 'FastShare + Webshare',
-      description: 'FastShare + Webshare streams with strict CZ/SK dubbing catalogs for Stremio/Nuvio.',
+      description: 'Single-provider FastShare/Webshare streams sorted by size, with strict CZ/SK dubbing catalogs.',
       logo: 'https://www.stremio.com/website/stremio-logo-small.png',
       resources: ['catalog', 'meta', 'stream'],
       types: ['movie', 'series'],
