@@ -8,9 +8,9 @@ const guarded = require('../src/entrypoint');
 const modular = require('../src/server');
 const { VERSION } = require('../src/config');
 
-test('root server.js delegates to the guarded modular production runtime', () => {
+test('root server.js delegates to the guarded unified production runtime', () => {
   assert.ok(compat.app);
   assert.equal(compat.app, guarded.app);
   assert.equal(guarded.app, modular.app);
-  assert.equal(VERSION, '6.4.6');
+  assert.equal(VERSION, '7.0.0');
 });

@@ -1,7 +1,7 @@
 {
-  "name": "fastshare-stremio-addon-v6-configurator",
-  "version": "6.4.6",
-  "description": "FastShare Stremio addon with staged localized search, resilient ranking, series guards, explicit movie-year protection, strict one-word movie alias boundaries, NardBadges design, verified audio-language badges, and country flags.",
+  "name": "fastshare-webshare-stremio-addon",
+  "version": "7.0.0",
+  "description": "Unified FastShare + Webshare Stremio/Nuvio addon with staged localized search, resilient ranking, metadata matching and configurable credentials for both providers.",
   "main": "src/entrypoint.js",
   "scripts": {
     "start": "node src/entrypoint.js",
