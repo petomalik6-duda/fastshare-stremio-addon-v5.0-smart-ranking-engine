@@ -12,11 +12,35 @@ function installProviderStreamMode(runtime) {
   ]);
   app._router.stack = app._router.stack.filter(layer => !layer.route || !paths.has(layer.route.path));
 
-  function sortBySize(streams) {
+  function dubbingRank(stream) {
+    const text = `${stream?.name || ''} ${stream?.title || ''}`.toLowerCase();
+    // Highest confidence: explicit bilingual or explicit CZ/SK dubbing labels.
+    if (/cz\s*\/\s*sk\s*(dabing|dub|dubbing)|cz\/sk\s*dabing|cz-sk\s*dabing/.test(text)) return 4;
+    if (/\bcz\s*(dabing|dub|dubbing)\b|\bczech\s*(audio|dub|dubbing)\b/.test(text)) return 3;
+    if (/\bsk\s*(dabing|dub|dubbing)\b|\bslovak\s*(audio|dub|dubbing)\b/.test(text)) return 3;
+    if (/\bcz\s*audio\b|\bsk\s*audio\b/.test(text)) return 2;
+    if (/\bdabing\b|\bdubbed\b|\bdubbing\b/.test(text)) return 1;
+    return 0;
+  }
+
+  function streamSize(stream) {
+    return Number(stream?.behaviorHints?.videoSize || 0);
+  }
+
+  function providerRank(stream) {
+    const name = String(stream?.name || '').toLowerCase();
+    if (name.includes('fastshare')) return 1;
+    if (name.includes('webshare')) return 0;
+    return 0;
+  }
+
+  function sortCombined(streams) {
     return [...(streams || [])].sort((a, b) => {
-      const left = Number(a?.behaviorHints?.videoSize || 0);
-      const right = Number(b?.behaviorHints?.videoSize || 0);
-      return right - left;
+      const dubDiff = dubbingRank(b) - dubbingRank(a);
+      if (dubDiff) return dubDiff;
+      const sizeDiff = streamSize(b) - streamSize(a);
+      if (sizeDiff) return sizeDiff;
+      return providerRank(b) - providerRank(a);
     });
   }
 
@@ -26,19 +50,15 @@ function installProviderStreamMode(runtime) {
       runtime.buildWebshareStreams(req, debug)
     ]);
 
-    const fastStreams = sortBySize(fastshare?.streams || []);
-    const webStreams = sortBySize(webshare?.streams || []);
-
-    // Never combine providers in one response. FastShare is primary because the
-    // original addon is FastShare-first; Webshare is the automatic fallback.
-    const provider = fastStreams.length ? 'fastshare' : (webStreams.length ? 'webshare' : 'none');
-    const streams = provider === 'fastshare' ? fastStreams : provider === 'webshare' ? webStreams : [];
+    const fastStreams = fastshare?.streams || [];
+    const webStreams = webshare?.streams || [];
+    const streams = sortCombined([...fastStreams, ...webStreams]);
 
     if (!debug) return { streams };
     return {
       ok: true,
-      provider,
-      sort: 'size-desc',
+      mode: 'combined',
+      sort: 'dubbing-desc,size-desc',
       streamCount: streams.length,
       providers: {
         fastshare: {
@@ -63,9 +83,9 @@ function installProviderStreamMode(runtime) {
       console.log('[provider-stream]', JSON.stringify({
         type: req.params.type,
         id: req.params.id,
-        provider: payload.provider || (payload.streams?.[0]?.name || 'none'),
+        mode: 'combined',
         count: payload.streams?.length || 0,
-        sort: 'size-desc'
+        sort: 'dubbing-desc,size-desc'
       }));
       res.json(payload);
     } catch (error) {
