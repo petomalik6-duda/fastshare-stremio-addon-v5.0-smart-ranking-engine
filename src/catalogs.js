@@ -18,22 +18,28 @@ const CATALOGS = [
   { id: 'unified-czsk-series', type: 'series', name: '🇨🇿🇸🇰 CZ/SK dabing – seriály' },
   { id: 'unified-cz-movies', type: 'movie', name: '🇨🇿 CZ dabing – filmy', audio: 'cz' },
   { id: 'unified-sk-movies', type: 'movie', name: '🇸🇰 SK dabing – filmy', audio: 'sk' },
-  { id: 'unified-4k-czsk', type: 'movie', name: '🎬 4K CZ/SK', quality: '2160p' }
+  { id: 'unified-4k-czsk', type: 'movie', name: '🎬 4K CZ/SK dabing', quality: '2160p' }
 ];
 
 function catalogDef(id, type) {
   return CATALOGS.find(item => item.id === id && item.type === type) || null;
 }
 
-function hasCzSkAudio(file, requested = null) {
+function strictDubLanguage(file) {
   const audio = file?.audio || detectAudio(file?.name || '');
-  const key = String(audio?.key || '').toLowerCase();
-  const label = String(audio?.label || '').toLowerCase();
-  const cz = key.includes('cz') || label.includes('cz') || label.includes('czech') || label.includes('česk');
-  const sk = key.includes('sk') || label.includes('sk') || label.includes('slovak') || label.includes('sloven');
-  if (requested === 'cz') return cz;
-  if (requested === 'sk') return sk;
-  return cz || sk;
+  if (!audio?.verifiedAudio || audio?.evidence !== 'explicit-dub') return { cz: false, sk: false };
+  const key = String(audio?.key || '').toUpperCase();
+  return {
+    cz: key === 'CZ' || key === 'CZ-SK',
+    sk: key === 'SK' || key === 'CZ-SK'
+  };
+}
+
+function hasCzSkAudio(file, requested = null) {
+  const lang = strictDubLanguage(file);
+  if (requested === 'cz') return lang.cz;
+  if (requested === 'sk') return lang.sk;
+  return lang.cz || lang.sk;
 }
 
 function qualityMatches(file, wanted) {
@@ -43,28 +49,19 @@ function qualityMatches(file, wanted) {
 
 async function cinemetaCandidates(type, skip = 0) {
   const url = `https://v3-cinemeta.strem.io/catalog/${type}/top.json?skip=${Math.max(0, Number(skip || 0))}`;
-  const payload = await fetchJson(url, {
-    headers: { 'User-Agent': `FastShare-Webshare/${VERSION}` }
-  });
+  const payload = await fetchJson(url, { headers: { 'User-Agent': `FastShare-Webshare/${VERSION}` } });
   return (Array.isArray(payload?.metas) ? payload.metas : []).slice(0, CANDIDATE_LIMIT);
 }
 
 function providerCreds(config) {
-  return {
-    fastshare: config?.fastshare || {},
-    webshare: config?.webshare || {}
-  };
+  return { fastshare: config?.fastshare || {}, webshare: config?.webshare || {} };
 }
 
 async function authProviders(config) {
   const creds = providerCreds(config);
   const [fastshare, webshare] = await Promise.all([
-    creds.fastshare?.username && creds.fastshare?.password
-      ? fastshareLogin(creds.fastshare)
-      : Promise.resolve({ ok: false, error: 'not configured' }),
-    creds.webshare?.username && creds.webshare?.password
-      ? webshareLogin(creds.webshare)
-      : Promise.resolve({ ok: false, error: 'not configured' })
+    creds.fastshare?.username && creds.fastshare?.password ? fastshareLogin(creds.fastshare) : Promise.resolve({ ok: false, error: 'not configured' }),
+    creds.webshare?.username && creds.webshare?.password ? webshareLogin(creds.webshare) : Promise.resolve({ ok: false, error: 'not configured' })
   ]);
   return { fastshare, webshare };
 }
@@ -91,6 +88,7 @@ async function availabilityForMeta(meta, type, def, auth) {
     ...fastFiles.map(file => ({ ...file, provider: 'fastshare' })),
     ...webFiles.map(file => ({ ...file, provider: 'webshare' }))
   ];
+
   const ranked = rankFiles(files, meta, type)
     .filter(file => hasCzSkAudio(file, def.audio || null))
     .filter(file => qualityMatches(file, def.quality || null));
@@ -116,13 +114,10 @@ function metaToCatalogItem(base, match) {
     runtime: base.runtime,
     trailers: base.trailers,
     links: base.links,
-    behaviorHints: {
-      ...(base.behaviorHints || {}),
-      defaultVideoId: base.id
-    }
+    behaviorHints: { ...(base.behaviorHints || {}), defaultVideoId: base.id }
   };
   item.description = [
-    match?.provider ? `Dostupné cez ${match.provider === 'fastshare' ? 'FastShare' : 'Webshare'}.` : '',
+    match?.provider ? `Overený explicitný CZ/SK dabing cez ${match.provider === 'fastshare' ? 'FastShare' : 'Webshare'}.` : '',
     base.description || ''
   ].filter(Boolean).join(' ');
   return item;
@@ -131,16 +126,13 @@ function metaToCatalogItem(base, match) {
 async function buildCatalog({ type, id, skip = 0, config, configKey = '' }) {
   const def = catalogDef(id, type);
   if (!def) return { metas: [] };
-
   const normalizedSkip = Math.max(0, Number(skip || 0));
-  const cacheKey = `${configKey}:${type}:${id}:${normalizedSkip}`;
+  const cacheKey = `strict-v2:${configKey}:${type}:${id}:${normalizedSkip}`;
   const cached = getFreshCache(catalogCache, cacheKey, CATALOG_CACHE_TTL_MS);
   if (cached) return { ...cached, cache: 'hit' };
 
   const auth = await authProviders(config);
-  if (!auth.fastshare.ok && !auth.webshare.ok) {
-    return { metas: [], auth: { fastshare: auth.fastshare.ok, webshare: auth.webshare.ok } };
-  }
+  if (!auth.fastshare.ok && !auth.webshare.ok) return { metas: [], auth: { fastshare: false, webshare: false } };
 
   const candidates = await cinemetaCandidates(type, normalizedSkip);
   const checked = await mapWithConcurrency(candidates, 3, async base => {
@@ -148,9 +140,7 @@ async function buildCatalog({ type, id, skip = 0, config, configKey = '' }) {
       const meta = await getMeta(type, base.id);
       const match = await availabilityForMeta(meta, type, def, auth);
       return match ? metaToCatalogItem(base, match) : null;
-    } catch {
-      return null;
-    }
+    } catch { return null; }
   });
 
   const value = {
@@ -163,4 +153,4 @@ async function buildCatalog({ type, id, skip = 0, config, configKey = '' }) {
   return value;
 }
 
-module.exports = { CATALOGS, catalogDef, buildCatalog, hasCzSkAudio, qualityMatches };
+module.exports = { CATALOGS, catalogDef, buildCatalog, hasCzSkAudio, qualityMatches, strictDubLanguage };
