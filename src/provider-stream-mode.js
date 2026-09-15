@@ -1,5 +1,17 @@
 'use strict';
 
+const { login: fastshareLogin, searchFastshare, streamUrl: fastshareStreamUrl } = require('./fastshare');
+const { login: webshareLogin, searchWebshare, streamUrl: webshareStreamUrl } = require('./webshare');
+const { mapWithConcurrency, bytesToHuman, normalize } = require('./utils');
+const { detectAudio, detectQuality } = require('./ranking');
+
+function decodeConcertId(id) {
+  const raw = String(id || '');
+  if (!raw.startsWith('concert:')) return '';
+  try { return Buffer.from(raw.slice(8), 'base64url').toString('utf8'); }
+  catch { return ''; }
+}
+
 function installProviderStreamMode(runtime) {
   const app = runtime.app;
   if (!app?._router?.stack) return runtime;
@@ -27,8 +39,11 @@ function installProviderStreamMode(runtime) {
   }
 
   function providerOf(stream) {
-    const text = `${stream?.name || ''} ${stream?.title || ''}`.toLowerCase();
-    return text.includes('webshare') ? 'webshare' : 'fastshare';
+    const title = String(stream?.title || '').toLowerCase();
+    if (title.includes('[webshare]')) return 'webshare';
+    if (title.includes('[fastshare]')) return 'fastshare';
+    const name = String(stream?.name || '').toLowerCase();
+    return name.includes('webshare') ? 'webshare' : 'fastshare';
   }
 
   function labelProvider(stream, provider) {
@@ -37,7 +52,8 @@ function installProviderStreamMode(runtime) {
     const taggedTitle = title.startsWith(`[${tag}]`) ? title : `[${tag}] ${title}`;
     return {
       ...stream,
-      name: `${tag}${String(stream?.name || '').replace(/^(FastShare|Webshare)/i, '')}`,
+      // One identical name forces Nuvio/Stremio to present both providers as one source list.
+      name: 'FastShare + Webshare',
       title: taggedTitle
     };
   }
@@ -55,24 +71,20 @@ function installProviderStreamMode(runtime) {
     const out = [];
     let streakProvider = null;
     let streak = 0;
-
     while (fast.length || web.length) {
-      const f = fast[0];
-      const w = web[0];
+      const f = fast[0], w = web[0];
       let pick;
       if (!f) pick = 'webshare';
       else if (!w) pick = 'fastshare';
       else {
         const natural = streamSize(f) >= streamSize(w) ? 'fastshare' : 'webshare';
         const other = natural === 'fastshare' ? 'webshare' : 'fastshare';
-        pick = streakProvider === natural && streak >= 3 ? other : natural;
+        pick = streakProvider === natural && streak >= 2 ? other : natural;
       }
-
       const chosen = pick === 'fastshare' ? fast.shift() : web.shift();
       if (!chosen) continue;
       out.push(chosen);
-      if (streakProvider === pick) streak++;
-      else { streakProvider = pick; streak = 1; }
+      if (streakProvider === pick) streak++; else { streakProvider = pick; streak = 1; }
     }
     return out;
   }
@@ -85,26 +97,74 @@ function installProviderStreamMode(runtime) {
       groups.get(rank).push(stream);
     }
     const out = [];
-    for (const rank of [4, 3, 2, 1, 0]) {
-      if (groups.has(rank)) out.push(...balancedGroup(groups.get(rank)));
-    }
+    for (const rank of [4, 3, 2, 1, 0]) if (groups.has(rank)) out.push(...balancedGroup(groups.get(rank)));
     return out;
   }
 
+  function titleMatch(name, query) {
+    const a = normalize(name);
+    const b = normalize(query);
+    if (!a || !b) return false;
+    const tokens = b.split(' ').filter(t => t.length >= 3 && !['live','concert','tour','world','the','and'].includes(t));
+    return a.includes(b) || (tokens.length >= 2 && tokens.filter(t => a.includes(t)).length >= Math.ceil(tokens.length * 0.7));
+  }
+
+  function directStreamObject(file, provider, url) {
+    const audio = detectAudio(file.name || '');
+    const quality = detectQuality(file.name || '');
+    const size = bytesToHuman(file.size || 0);
+    const title = `[${provider === 'webshare' ? 'Webshare' : 'FastShare'}] ${file.name}\n${[quality, size, audio.label].filter(Boolean).join(' • ')}`;
+    return {
+      name: 'FastShare + Webshare',
+      title,
+      url,
+      behaviorHints: {
+        filename: file.name,
+        videoSize: Number(file.size || 0) || undefined,
+        bingeGroup: `combined-concert-${provider}`
+      }
+    };
+  }
+
+  async function buildConcert(req, debug = false) {
+    const query = decodeConcertId(req.params.id);
+    if (!query) return debug ? { ok: false, streams: [], error: 'invalid concert id' } : { streams: [] };
+    const cfg = runtime.unifiedConfig(req);
+    const [fa, wa] = await Promise.all([
+      fastshareLogin(cfg.fastshare),
+      webshareLogin(cfg.webshare)
+    ]);
+    const [fs, ws] = await Promise.all([
+      fa.ok ? searchFastshare(query, fa.hash) : Promise.resolve({ files: [] }),
+      wa.ok ? searchWebshare(query, wa.token) : Promise.resolve({ files: [] })
+    ]);
+    const fastFiles = (fs.files || []).filter(f => titleMatch(f.name, query)).slice(0, 30);
+    const webFiles = (ws.files || []).filter(f => titleMatch(f.name, query)).slice(0, 30);
+    const [fastStreams, webStreams] = await Promise.all([
+      Promise.all(fastFiles.map(async f => directStreamObject(f, 'fastshare', fastshareStreamUrl(f, fa.hash)))),
+      mapWithConcurrency(webFiles, 4, async f => {
+        const url = await webshareStreamUrl(f, wa.token);
+        return url ? directStreamObject(f, 'webshare', url) : null;
+      })
+    ]);
+    const streams = sortCombined([...fastStreams.filter(s => s.url), ...webStreams.filter(Boolean)]);
+    if (!debug) return { streams };
+    return { ok: true, mode: 'concert-direct-combined', query, streamCount: streams.length, streams };
+  }
+
   async function build(req, debug = false) {
+    if (String(req.params.id || '').startsWith('concert:')) return buildConcert(req, debug);
     const [fastshare, webshare] = await Promise.all([
       runtime.buildStreamResponse(req, debug),
       runtime.buildWebshareStreams(req, debug)
     ]);
-
     const fastStreams = prepare(fastshare?.streams || [], 'fastshare');
     const webStreams = prepare(webshare?.streams || [], 'webshare');
     const streams = sortCombined([...fastStreams, ...webStreams]);
-
     if (!debug) return { streams };
     return {
       ok: true,
-      mode: 'combined-balanced',
+      mode: 'combined-balanced-single-name',
       sort: 'dubbing-desc,size-desc,provider-balanced',
       streamCount: streams.length,
       providers: {
@@ -123,7 +183,7 @@ function installProviderStreamMode(runtime) {
       console.log('[provider-stream]', JSON.stringify({
         type: req.params.type,
         id: req.params.id,
-        mode: 'combined-balanced',
+        mode: payload.mode || 'combined-balanced-single-name',
         count: streams.length,
         fastshare: streams.filter(s => providerOf(s) === 'fastshare').length,
         webshare: streams.filter(s => providerOf(s) === 'webshare').length,
@@ -141,7 +201,7 @@ function installProviderStreamMode(runtime) {
   app.get('/debug/stream/:type/:id.json', (req, res) => send(req, res, true));
   app.get('/:config/debug/stream/:type/:id.json', (req, res) => send(req, res, true));
 
-  return { ...runtime, buildProviderStreamResponse: build };
+  return { ...runtime, buildProviderStreamResponse: build, decodeConcertId };
 }
 
 module.exports = installProviderStreamMode;
