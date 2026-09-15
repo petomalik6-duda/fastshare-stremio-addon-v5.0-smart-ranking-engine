@@ -19,7 +19,7 @@ const CANDIDATE_LIMIT = Math.max(CATALOG_PAGE_SIZE, Math.min(60, Number(process.
 const catalogCache = new Map();
 
 const FALSE_DUB_SERIES = new Set([
-  'tt10986410' // Ted Lasso: known false-positive filename tagging in provider results.
+  'tt10986410'
 ]);
 
 const CATALOGS = [
@@ -35,6 +35,14 @@ const CATALOGS = [
 
 function catalogDef(id, type) {
   return CATALOGS.find(item => item.id === id && item.type === type) || null;
+}
+
+function preferredLocalizedTitle(meta, fallback = '') {
+  const details = Array.isArray(meta?.localizedTitleData?.aliasDetails)
+    ? meta.localizedTitleData.aliasDetails
+    : [];
+  const pick = lang => details.find(item => String(item?.language || '').toLowerCase() === lang && String(item?.title || '').trim());
+  return pick('cs')?.title || pick('sk')?.title || meta?.title || fallback || '';
 }
 
 function strictDubLanguage(file) {
@@ -132,7 +140,6 @@ async function tmdbCandidates(type, skip = 0, mode = 'latest') {
   let rows = await fetchTmdbDiscoverPages(type, mode, startPage, pageCount);
 
   if (mode === 'concerts') {
-    // Title must itself look like a concert/live release. Overview text is not enough.
     const concertTitleRx = /\b(concert|live\s+(at|in|from)|live$|world\s+tour|tour\s+live|unplugged|festival|live\s+concert|live\s+performance)\b/i;
     rows = rows.filter(item => concertTitleRx.test(String(item.title || item.name || item.original_title || item.original_name || '')));
   }
@@ -261,7 +268,6 @@ async function availabilityForMeta(meta, type, def, auth) {
     ranked = ranked.filter(file => hasCzSkAudio(file, def.audio || null));
     if (type === 'series') {
       ranked = ranked.filter(file => strictSeriesTitleEvidence(file, meta));
-      // One mislabeled upload must not be enough to classify an entire series as dubbed.
       const uniqueNames = new Set(ranked.map(file => normalize(file.name || '')));
       if (uniqueNames.size < 2) return null;
     }
@@ -270,7 +276,7 @@ async function availabilityForMeta(meta, type, def, auth) {
   return ranked[0] || null;
 }
 
-function metaToCatalogItem(base, match, type, def) {
+function metaToCatalogItem(base, match, type, def, meta) {
   const behaviorHints = { ...(base.behaviorHints || {}) };
   if (type === 'movie') behaviorHints.defaultVideoId = base.id;
   else delete behaviorHints.defaultVideoId;
@@ -278,7 +284,7 @@ function metaToCatalogItem(base, match, type, def) {
   const item = {
     id: base.id,
     type,
-    name: base.name,
+    name: preferredLocalizedTitle(meta, base.name),
     poster: base.poster,
     background: base.background,
     logo: base.logo,
@@ -309,7 +315,7 @@ async function buildCatalog({ type, id, skip = 0, config, configKey = '' }) {
   const def = catalogDef(id, type);
   if (!def) return { metas: [] };
   const normalizedSkip = Math.max(0, Number(skip || 0));
-  const cacheKey = `catalog-v8:${configKey}:${type}:${id}:${normalizedSkip}`;
+  const cacheKey = `catalog-v9:${configKey}:${type}:${id}:${normalizedSkip}`;
   const cached = getFreshCache(catalogCache, cacheKey, CATALOG_CACHE_TTL_MS);
   if (cached) return { ...cached, cache: 'hit' };
 
@@ -321,7 +327,7 @@ async function buildCatalog({ type, id, skip = 0, config, configKey = '' }) {
     try {
       const meta = await getMeta(type, base.id);
       const match = await availabilityForMeta(meta, type, def, auth);
-      return match ? metaToCatalogItem(base, match, type, def) : null;
+      return match ? metaToCatalogItem(base, match, type, def, meta) : null;
     } catch {
       return null;
     }
@@ -349,6 +355,7 @@ module.exports = {
   qualityMatches,
   strictDubLanguage,
   strictSeriesTitleEvidence,
+  preferredLocalizedTitle,
   tmdbCandidates,
   catalogCandidates
 };
