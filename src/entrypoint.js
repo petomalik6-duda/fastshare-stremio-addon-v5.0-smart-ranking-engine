@@ -101,6 +101,7 @@ function guardedRankFiles(files, meta, type) {
 ranking.rankFiles = guardedRankFiles;
 
 const runtime = require('./unified-server');
+require('./configure-fix')(runtime);
 
 runtime.app.get('/deploy-info', (req, res) => {
   res.set('Cache-Control', 'no-store');
@@ -109,6 +110,7 @@ runtime.app.get('/deploy-info', (req, res) => {
     version: VERSION,
     entrypoint: 'src/entrypoint.js',
     runtime: 'FastShare+Webshare unified',
+    configurator: 'server-side',
     renderGitCommit: process.env.RENDER_GIT_COMMIT || null,
     renderServiceName: process.env.RENDER_SERVICE_NAME || null,
     renderExternalUrl: process.env.RENDER_EXTERNAL_URL || null
