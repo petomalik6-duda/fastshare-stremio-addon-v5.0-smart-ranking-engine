@@ -1,6 +1,6 @@
 'use strict';
 
-const { CATALOGS } = require('./catalogs');
+const { CATALOGS, preferredLocalizedTitle } = require('./catalogs');
 
 function installManifestCompat(runtime) {
   const app = runtime.app;
@@ -14,10 +14,10 @@ function installManifestCompat(runtime) {
 
   function manifest(configToken = null) {
     return {
-      id: 'community.fastshare.webshare.unified.v712',
-      version: '7.12.0',
+      id: 'community.fastshare.webshare.unified.v713',
+      version: '7.13.0',
       name: 'FastShare + Webshare',
-      description: 'Unified FastShare/Webshare streams with reference concerts matched by external IDs, source filenames, TMDB, Wikipedia and CSFD links.',
+      description: 'Unified FastShare/Webshare streams with Czech-first, Slovak-second localized movie and series titles plus reference concert metadata matching.',
       logo: 'https://www.stremio.com/website/stremio-logo-small.png',
       resources: ['catalog', 'meta', 'stream'],
       types: ['movie', 'series'],
@@ -52,10 +52,10 @@ function installManifestCompat(runtime) {
       const meta = {
         ...raw,
         id: raw.id || data.imdbId || req.params.id,
-        type: raw.type || req.params.type,
-        name: raw.name || raw.title || data.title || data.imdbId || req.params.id
+        type: req.params.type,
+        name: preferredLocalizedTitle(data, raw.name || raw.title || data.title || data.imdbId || req.params.id)
       };
-      res.set('Cache-Control', 'public, max-age=3600');
+      res.set('Cache-Control', 'public, max-age=900');
       res.json({ meta });
     } catch (error) {
       res.status(404).json({ meta: null });
