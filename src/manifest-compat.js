@@ -14,10 +14,10 @@ function installManifestCompat(runtime) {
 
   function manifest(configToken = null) {
     return {
-      id: 'community.fastshare.webshare.unified.v78',
-      version: '7.8.0',
+      id: 'community.fastshare.webshare.unified.v79',
+      version: '7.9.0',
       name: 'FastShare + Webshare',
-      description: 'Combined and balanced FastShare/Webshare streams, corrected latest catalogs, strict concerts and stricter CZ/SK series dubbing.',
+      description: 'Unified FastShare/Webshare stream list plus provider-native concerts, latest catalogs and strict CZ/SK dubbing.',
       logo: 'https://www.stremio.com/website/stremio-logo-small.png',
       resources: ['catalog', 'meta', 'stream'],
       types: ['movie', 'series'],
@@ -27,7 +27,7 @@ function installManifestCompat(runtime) {
         name: item.name,
         extra: [{ name: 'skip', isRequired: false }]
       })),
-      idPrefixes: ['tt'],
+      idPrefixes: ['tt', 'concert'],
       behaviorHints: {
         configurable: true,
         configurationRequired: !configToken
