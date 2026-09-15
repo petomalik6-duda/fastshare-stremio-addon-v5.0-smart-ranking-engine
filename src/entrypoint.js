@@ -88,15 +88,17 @@ ranking.rankFiles = guardedRankFiles;
 const runtime = require('./unified-server');
 require('./configure-fix')(runtime);
 require('./runtime-fix-v72')(runtime);
+const compatibleRuntime = require('./manifest-compat')(runtime);
 
-runtime.app.get('/deploy-info', (req, res) => {
+compatibleRuntime.app.get('/deploy-info', (req, res) => {
   res.set('Cache-Control', 'no-store');
   res.json({
     ok: true,
-    version: VERSION,
+    version: '7.3.0',
     entrypoint: 'src/entrypoint.js',
-    runtime: 'FastShare+Webshare unified v72',
+    runtime: 'FastShare+Webshare unified v73',
     configurator: 'server-side',
+    manifestCompat: true,
     renderGitCommit: process.env.RENDER_GIT_COMMIT || null,
     renderServiceName: process.env.RENDER_SERVICE_NAME || null,
     renderExternalUrl: process.env.RENDER_EXTERNAL_URL || null
@@ -104,15 +106,15 @@ runtime.app.get('/deploy-info', (req, res) => {
 });
 
 function start() {
-  return runtime.app.listen(PORT, () => {
-    console.log(`FastShare + Webshare Stremio addon v${VERSION} on ${PORT}`);
+  return compatibleRuntime.app.listen(PORT, () => {
+    console.log(`FastShare + Webshare Stremio addon v7.3.0 on ${PORT}`);
   });
 }
 
 if (require.main === module) start();
 
 module.exports = {
-  ...runtime,
+  ...compatibleRuntime,
   start,
   canonicalSeriesNearCollision,
   explicitMovieYearCollision,
