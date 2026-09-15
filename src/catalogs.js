@@ -96,10 +96,14 @@ async function availabilityForMeta(meta, type, def, auth) {
   return ranked[0] || null;
 }
 
-function metaToCatalogItem(base, match) {
+function metaToCatalogItem(base, match, type) {
+  const behaviorHints = { ...(base.behaviorHints || {}) };
+  if (type === 'movie') behaviorHints.defaultVideoId = base.id;
+  else delete behaviorHints.defaultVideoId;
+
   const item = {
     id: base.id,
-    type: base.type,
+    type,
     name: base.name,
     poster: base.poster,
     background: base.background,
@@ -114,7 +118,7 @@ function metaToCatalogItem(base, match) {
     runtime: base.runtime,
     trailers: base.trailers,
     links: base.links,
-    behaviorHints: { ...(base.behaviorHints || {}), defaultVideoId: base.id }
+    behaviorHints
   };
   item.description = [
     match?.provider ? `Overený explicitný CZ/SK dabing cez ${match.provider === 'fastshare' ? 'FastShare' : 'Webshare'}.` : '',
@@ -127,7 +131,7 @@ async function buildCatalog({ type, id, skip = 0, config, configKey = '' }) {
   const def = catalogDef(id, type);
   if (!def) return { metas: [] };
   const normalizedSkip = Math.max(0, Number(skip || 0));
-  const cacheKey = `strict-v2:${configKey}:${type}:${id}:${normalizedSkip}`;
+  const cacheKey = `strict-v3:${configKey}:${type}:${id}:${normalizedSkip}`;
   const cached = getFreshCache(catalogCache, cacheKey, CATALOG_CACHE_TTL_MS);
   if (cached) return { ...cached, cache: 'hit' };
 
@@ -139,7 +143,7 @@ async function buildCatalog({ type, id, skip = 0, config, configKey = '' }) {
     try {
       const meta = await getMeta(type, base.id);
       const match = await availabilityForMeta(meta, type, def, auth);
-      return match ? metaToCatalogItem(base, match) : null;
+      return match ? metaToCatalogItem(base, match, type) : null;
     } catch { return null; }
   });
 
