@@ -15,9 +15,9 @@ const { login: webshareLogin, searchWebshare } = require('./webshare');
 const CATALOG_CACHE_TTL_MS = Number(process.env.CATALOG_CACHE_TTL_MS || 1000 * 60 * 15);
 const CATALOG_CACHE_MAX = 120;
 const CATALOG_PAGE_SIZE = Math.max(10, Math.min(40, Number(process.env.CATALOG_PAGE_SIZE || 20)));
-const CANDIDATE_LIMIT = Math.max(CATALOG_PAGE_SIZE, Math.min(160, Number(process.env.CATALOG_CANDIDATE_LIMIT || 120)));
-const LATEST_CANDIDATE_LIMIT = Math.max(100, Math.min(260, Number(process.env.LATEST_CANDIDATE_LIMIT || 180)));
-const FOUR_K_CANDIDATE_LIMIT = Math.max(160, Math.min(360, Number(process.env.FOUR_K_CANDIDATE_LIMIT || 280)));
+const CANDIDATE_LIMIT = Math.max(CATALOG_PAGE_SIZE, Math.min(180, Number(process.env.CATALOG_CANDIDATE_LIMIT || 140)));
+const LATEST_CANDIDATE_LIMIT = Math.max(120, Math.min(320, Number(process.env.LATEST_CANDIDATE_LIMIT || 220)));
+const FOUR_K_CANDIDATE_LIMIT = Math.max(220, Math.min(480, Number(process.env.FOUR_K_CANDIDATE_LIMIT || 360)));
 const LOCAL_CANDIDATE_LIMIT = Math.max(40, Math.min(140, Number(process.env.LOCAL_CANDIDATE_LIMIT || 80)));
 const catalogCache = new Map();
 
@@ -27,11 +27,11 @@ const CATALOGS = [
   { id: 'unified-latest-movies', type: 'movie', name: '🆕 Najnovšie dostupné filmy', source: 'latest', requireDub: false },
   { id: 'unified-latest-series', type: 'series', name: '🆕 Najnovšie dostupné seriály', source: 'latest', requireDub: false },
   { id: 'unified-concerts', type: 'movie', name: '🎵 Koncerty', source: 'concerts', requireDub: false },
-  { id: 'unified-czsk-movies', type: 'movie', name: '🇨🇿🇸🇰 CZ/SK dabing + originál – filmy' },
-  { id: 'unified-czsk-series', type: 'series', name: '🇨🇿🇸🇰 CZ/SK dabing + originál – seriály' },
-  { id: 'unified-cz-movies', type: 'movie', name: '🇨🇿 CZ dabing + české filmy', audio: 'cz' },
-  { id: 'unified-sk-movies', type: 'movie', name: '🇸🇰 SK dabing + slovenské filmy', audio: 'sk' },
-  { id: 'unified-4k-czsk', type: 'movie', name: '🎬 4K CZ/SK dabing + originál', quality: '2160p' }
+  { id: 'unified-czsk-movies', type: 'movie', name: '🇨🇿🇸🇰 CZ/SK dabované filmy', source: 'latest' },
+  { id: 'unified-czsk-series', type: 'series', name: '🇨🇿🇸🇰 CZ/SK dabované seriály', source: 'latest' },
+  { id: 'unified-cz-movies', type: 'movie', name: '🇨🇿 CZ dabing – filmy', audio: 'cz' },
+  { id: 'unified-sk-movies', type: 'movie', name: '🇸🇰 SK dabing – filmy', audio: 'sk' },
+  { id: 'unified-4k-czsk', type: 'movie', name: '🎬 4K CZ/SK dabované nové filmy', source: 'latest', quality: '2160p' }
 ];
 
 function catalogDef(id, type) {
@@ -46,9 +46,10 @@ function preferredLocalizedTitle(meta, fallback = '') {
 
 function strictDubLanguage(file) {
   const audio = file?.audio || detectAudio(file?.name || '');
-  if (!audio?.verifiedAudio || audio?.evidence !== 'explicit-dub') return { cz: false, sk: false };
+  const allowedEvidence = new Set(['explicit-dub', 'explicit-or-codec', 'audio-codec', 'track-metadata']);
+  if (!audio?.verifiedAudio || !allowedEvidence.has(String(audio?.evidence || ''))) return { cz: false, sk: false };
   const key = String(audio?.key || '').toUpperCase();
-  return { cz: key === 'CZ' || key === 'CZ-SK', sk: key === 'SK' || key === 'CZ-SK' };
+  return { cz: key === 'CZ' || key === 'CZ-SK' || key === 'CZ-EN', sk: key === 'SK' || key === 'CZ-SK' || key === 'SK-EN' };
 }
 
 function hasCzSkAudio(file, requested = null) {
@@ -145,7 +146,7 @@ async function tmdbCandidates(type, skip = 0, mode = 'latest', requestedLimit = 
   if (!tmdbEnabled()) return [];
   const startPage = Math.floor(Math.max(0, Number(skip || 0)) / 20) + 1;
   const limit = requestedLimit || (mode === 'latest' ? LATEST_CANDIDATE_LIMIT : CANDIDATE_LIMIT);
-  const pageCount = mode === 'concerts' ? 10 : Math.max(8, Math.min(18, Math.ceil(limit / 20) + 2));
+  const pageCount = mode === 'concerts' ? 10 : Math.max(8, Math.min(24, Math.ceil(limit / 20) + 2));
   let rows = await fetchTmdbDiscoverPages(type, mode, startPage, pageCount);
   if (mode === 'concerts') {
     const rx = /\b(concert|live\s+(at|in|from)|live$|world\s+tour|tour\s+live|unplugged|festival|live\s+concert|live\s+performance)\b/i;
@@ -209,12 +210,9 @@ function mergeCandidates(local, global, limit = 120) {
 async function catalogCandidates(type, def, skip) {
   if (def.source === 'latest') {
     const limit = def.quality ? FOUR_K_CANDIDATE_LIMIT : LATEST_CANDIDATE_LIMIT;
-    const [tmdb, local] = await Promise.all([
-      tmdbCandidates(type, skip, 'latest', limit),
-      def.requireDub === false ? Promise.resolve([]) : tmdbLocalCandidates(type, skip)
-    ]);
-    if (tmdb.length || local.length) return mergeCandidates(local, tmdb, limit);
-    const fallback = await cinemetaCandidates(type, skip, def.quality ? 5 : 3);
+    const tmdb = await tmdbCandidates(type, skip, 'latest', limit);
+    if (tmdb.length) return tmdb;
+    const fallback = await cinemetaCandidates(type, skip, def.quality ? 6 : 4);
     return fallback.sort((a, b) => String(b.releaseInfo || b.year || '').localeCompare(String(a.releaseInfo || a.year || ''))).slice(0, limit);
   }
   if (def.source === 'concerts') {
@@ -280,7 +278,7 @@ async function availabilityForMeta(meta, type, def, auth, base = null) {
 
   const plan = searchTermPlan(meta);
   const terms = [...new Set([...(plan.primary || []), ...(plan.fallback || [])].filter(Boolean))];
-  const maxTerms = def.source === 'concerts' ? 1 : def.quality ? 5 : def.source === 'latest' ? 3 : 2;
+  const maxTerms = def.source === 'concerts' ? 1 : def.quality ? 5 : def.source === 'latest' ? 4 : 2;
   const [fastFiles, webFiles] = await Promise.all([
     searchOneProvider(terms, 'fastshare', auth.fastshare, maxTerms),
     searchOneProvider(terms, 'webshare', auth.webshare, maxTerms)
@@ -292,8 +290,7 @@ async function availabilityForMeta(meta, type, def, auth, base = null) {
 
   let ranked = rankFiles(files, meta, type).filter(file => qualityMatches(file, def.quality || null));
   if (def.requireDub !== false) {
-    const nativeLocal = nativeLocaleAllowed(base, def);
-    if (!nativeLocal) ranked = ranked.filter(file => hasCzSkAudio(file, def.audio || null));
+    ranked = ranked.filter(file => hasCzSkAudio(file, def.audio || null));
     if (type === 'series') ranked = ranked.filter(file => strictSeriesTitleEvidence(file, meta));
   }
   return ranked[0] || null;
@@ -325,11 +322,9 @@ function metaToCatalogItem(base, match, type, def, meta) {
   };
 
   let prefix;
-  if (base?._nativeLocale === 'cz') prefix = `Český originál dostupný cez ${match?.provider === 'fastshare' ? 'FastShare' : 'Webshare'}.`;
-  else if (base?._nativeLocale === 'sk') prefix = `Slovenský originál dostupný cez ${match?.provider === 'fastshare' ? 'FastShare' : 'Webshare'}.`;
-  else if (def.source === 'concerts') prefix = `Koncert dostupný cez ${match?.provider === 'fastshare' ? 'FastShare' : 'Webshare'}.`;
+  if (def.source === 'concerts') prefix = `Koncert dostupný cez ${match?.provider === 'fastshare' ? 'FastShare' : 'Webshare'}.`;
   else if (def.requireDub === false) prefix = `Dostupné cez ${match?.provider === 'fastshare' ? 'FastShare' : 'Webshare'}.`;
-  else prefix = `CZ/SK dabing nájdený cez ${match?.provider === 'fastshare' ? 'FastShare' : 'Webshare'}.`;
+  else prefix = `CZ/SK audio/dabing nájdený cez ${match?.provider === 'fastshare' ? 'FastShare' : 'Webshare'}.`;
 
   item.description = [prefix, base.description || ''].filter(Boolean).join(' ');
   return item;
@@ -349,7 +344,7 @@ async function checkCandidateBatch(batch, type, def, auth) {
 
 async function fillCatalog(candidates, type, def, auth) {
   const metas = [];
-  const batchSize = def.quality ? 24 : 20;
+  const batchSize = def.quality ? 28 : 22;
   for (let offset = 0; offset < candidates.length && metas.length < CATALOG_PAGE_SIZE; offset += batchSize) {
     const checked = await checkCandidateBatch(candidates.slice(offset, offset + batchSize), type, def, auth);
     for (const item of checked) {
@@ -364,7 +359,7 @@ async function buildCatalog({ type, id, skip = 0, config, configKey = '' }) {
   const def = catalogDef(id, type);
   if (!def) return { metas: [] };
   const normalizedSkip = Math.max(0, Number(skip || 0));
-  const cacheKey = `catalog-v12:${configKey}:${type}:${id}:${normalizedSkip}`;
+  const cacheKey = `catalog-v13:${configKey}:${type}:${id}:${normalizedSkip}`;
   const cached = getFreshCache(catalogCache, cacheKey, CATALOG_CACHE_TTL_MS);
   if (cached) return { ...cached, cache: 'hit' };
 
@@ -381,7 +376,7 @@ async function buildCatalog({ type, id, skip = 0, config, configKey = '' }) {
     tmdbEnabled: tmdbEnabled(),
     candidates: candidates.length,
     localCandidates: candidates.filter(item => item?._nativeLocale).length,
-    scanMode: def.quality ? 'wide-adaptive' : 'adaptive',
+    scanMode: def.quality ? 'wide-adaptive-v13' : 'adaptive-v13',
     cache: 'miss'
   };
   setCache(catalogCache, cacheKey, value, CATALOG_CACHE_TTL_MS, CATALOG_CACHE_MAX);
