@@ -13,7 +13,7 @@ const TARGET_IDS = new Set([
   'unified-latest-series',
   'unified-4k-czsk'
 ]);
-const CACHE_TTL = Number(process.env.PROVIDER_RECENT_CACHE_TTL_MS || 10 * 60 * 1000);
+const CACHE_TTL = Number(process.env.PROVIDER_RECENT_CACHE_TTL_MS || 5 * 60 * 1000);
 const cache = new Map();
 
 function tmdbEnabled() { return Boolean(TMDB_API_KEY || TMDB_READ_ACCESS_TOKEN); }
@@ -57,6 +57,15 @@ function tokenScore(a, b) {
   return Math.round(100 * overlap / Math.max(at.size, bt.size));
 }
 
+async function tmdbSearch(path, query, year, isSeries, withYear) {
+  const params = { query, language: 'cs-CZ', include_adult: 'false' };
+  if (withYear && year) params[isSeries ? 'first_air_date_year' : 'primary_release_year'] = year;
+  try {
+    const data = await fetchJson(tmdbUrl(path, params), { headers: tmdbHeaders() });
+    return Array.isArray(data?.results) ? data.results : [];
+  } catch { return []; }
+}
+
 async function matchTmdb(file, type) {
   if (!tmdbEnabled()) return null;
   const query = cleanTitle(file.name);
@@ -64,20 +73,24 @@ async function matchTmdb(file, type) {
   const year = yearOf(file.name);
   const isSeries = type === 'series';
   const path = isSeries ? '/search/tv' : '/search/movie';
-  const params = { query, language: 'cs-CZ', include_adult: 'false' };
-  if (year) params[isSeries ? 'first_air_date_year' : 'primary_release_year'] = year;
-  let search;
-  try { search = await fetchJson(tmdbUrl(path, params), { headers: tmdbHeaders() }); } catch { return null; }
-  const rows = Array.isArray(search?.results) ? search.results : [];
+
+  const [withYear, withoutYear] = await Promise.all([
+    tmdbSearch(path, query, year, isSeries, true),
+    year ? tmdbSearch(path, query, year, isSeries, false) : Promise.resolve([])
+  ]);
+  const seen = new Set();
+  const rows = [...withYear, ...withoutYear].filter(row => row?.id && !seen.has(row.id) && seen.add(row.id));
   const ranked = rows.map(row => {
-    const title = row.title || row.name || row.original_title || row.original_name || '';
-    let score = tokenScore(query, title);
+    const names = [row.title, row.name, row.original_title, row.original_name].filter(Boolean);
+    let score = Math.max(0, ...names.map(name => tokenScore(query, name)));
     const rowYear = String(row.release_date || row.first_air_date || '').slice(0, 4);
     if (year && rowYear === year) score += 18;
+    else if (year && rowYear && Math.abs(Number(rowYear) - Number(year)) === 1) score += 6;
+    else if (year && rowYear && Math.abs(Number(rowYear) - Number(year)) > 2) score -= 12;
     return { row, score };
   }).sort((a, b) => b.score - a.score);
   const best = ranked[0];
-  if (!best || best.score < 62) return null;
+  if (!best || best.score < 52) return null;
   try {
     const extPath = isSeries ? `/tv/${best.row.id}/external_ids` : `/movie/${best.row.id}/external_ids`;
     const ext = await fetchJson(tmdbUrl(extPath), { headers: tmdbHeaders() });
@@ -91,10 +104,23 @@ async function matchTmdb(file, type) {
 function searchTerms(id, type) {
   const nowYear = new Date().getFullYear();
   const prev = nowYear - 1;
-  if (id === 'unified-4k-czsk') return ['2160p CZ', '2160p SK', '4K CZ', '4K SK', 'UHD CZ', 'UHD SK'];
-  if (id === 'unified-czsk-movies' || id === 'unified-czsk-series') return [`${nowYear} CZ`, `${nowYear} SK`, 'CZ dabing', 'SK dabing', 'CZ AC3', 'SK AC3'];
-  if (type === 'series') return [String(nowYear), String(prev), 'S01E', 'S02E'];
-  return [String(nowYear), String(prev), '1080p', '2160p'];
+  if (id === 'unified-4k-czsk') return ['2160p', '4K', 'UHD', '2160p CZ', '2160p SK', '4K CZ', '4K SK', 'UHD CZ', 'UHD SK'];
+  if (id === 'unified-czsk-movies' || id === 'unified-czsk-series') {
+    return ['CZ', 'SK', 'CZE', 'SVK', `${nowYear} CZ`, `${nowYear} SK`, 'CZ dabing', 'SK dabing', 'CZ audio', 'SK audio'];
+  }
+  if (type === 'series') return [String(nowYear), String(prev), 'S01E', 'S02E', 'WEB-DL', '1080p'];
+  return [String(nowYear), String(prev), '1080p', '2160p', 'WEB-DL', 'BluRay'];
+}
+
+function likelyCzSkRelease(file) {
+  if (hasCzSkAudio({ ...file, audio: undefined })) return true;
+  const n = normalize(file?.name || '');
+  if (!n) return false;
+  const subtitle = /\b(cz|cze|cs|cesky|czech|sk|svk|slovak|slovensky)\s*(tit|titulky|sub|subs|subtitle|forced)\b|\b(titulky|subs?|subtitle|forced)\b/.test(n);
+  if (subtitle) return false;
+  const language = /(^|\s)(cz|cze|cs|cesky|czech|sk|svk|slovak|slovensky)(\s|$)/.test(n);
+  const release = /\b(2160p|1080p|720p|4k|uhd|webdl|webrip|bluray|brrip|remux|mkv|mp4|x264|x265|h264|h265|hevc)\b/.test(n);
+  return language && release;
 }
 
 function eligibleFile(file, id, type) {
@@ -102,15 +128,15 @@ function eligibleFile(file, id, type) {
   if (type === 'series' && !series) return false;
   if (type === 'movie' && series) return false;
   if (id === 'unified-czsk-movies' || id === 'unified-czsk-series' || id === 'unified-4k-czsk') {
-    const audioFile = { ...file, audio: undefined };
-    if (!hasCzSkAudio(audioFile)) return false;
+    if (!likelyCzSkRelease(file)) return false;
   }
   if (id === 'unified-4k-czsk' && !qualityMatches(file, '2160p')) return false;
   return true;
 }
 
-function toCatalogItem(match, type, file) {
+function toCatalogItem(match, type, file, recentRank) {
   const raw = match.meta?.raw || {};
+  const releaseDate = String(match.row.release_date || match.row.first_air_date || '');
   return {
     ...raw,
     id: raw.id || match.imdbId,
@@ -118,7 +144,9 @@ function toCatalogItem(match, type, file) {
     name: raw.name || raw.title || match.meta?.title || cleanTitle(file.name),
     poster: raw.poster || (match.row.poster_path ? `https://image.tmdb.org/t/p/w500${match.row.poster_path}` : undefined),
     background: raw.background || (match.row.backdrop_path ? `https://image.tmdb.org/t/p/original${match.row.backdrop_path}` : undefined),
-    releaseInfo: raw.releaseInfo || String(match.row.release_date || match.row.first_air_date || '').slice(0, 4),
+    releaseInfo: raw.releaseInfo || releaseDate.slice(0, 4),
+    _releaseDate: releaseDate,
+    _providerRecentRank: recentRank,
     behaviorHints: {
       ...(raw.behaviorHints || {}),
       ...(type === 'movie' ? { defaultVideoId: match.imdbId } : {}),
@@ -132,36 +160,36 @@ async function providerRecent(runtime, req) {
   const type = req.params.type;
   const cfg = runtime.unifiedConfig ? runtime.unifiedConfig(req) : {};
   const userKey = String(cfg?.webshare?.username || '');
-  const cacheKey = `${userKey}:${type}:${id}`;
+  const cacheKey = `${userKey}:${type}:${id}:v2`;
   const hit = cache.get(cacheKey);
   if (hit && Date.now() - hit.at < CACHE_TTL) return hit.value;
 
   const auth = await webshareLogin(cfg.webshare || {});
   if (!auth.ok) return null;
   const terms = searchTerms(id, type);
-  const responses = await mapWithConcurrency(terms, 3, term => searchWebshareRecent(term, auth.token, { limit: 120 }));
+  const responses = await mapWithConcurrency(terms, 4, term => searchWebshareRecent(term, auth.token, { limit: 160 }));
   const files = [];
   const seenFile = new Set();
   const maxLen = Math.max(...responses.map(r => (r.files || []).length), 0);
-  for (let i = 0; i < maxLen && files.length < 180; i++) {
+  for (let i = 0; i < maxLen && files.length < 260; i++) {
     for (const response of responses) {
       const file = response.files?.[i];
       if (!file || seenFile.has(file.id) || !eligibleFile(file, id, type)) continue;
       seenFile.add(file.id);
-      files.push(file);
+      files.push({ ...file, _recentRank: files.length });
     }
   }
 
-  const matches = await mapWithConcurrency(files.slice(0, 120), 6, file => matchTmdb(file, type).then(match => match ? { file, match } : null));
+  const matches = await mapWithConcurrency(files.slice(0, 180), 7, file => matchTmdb(file, type).then(match => match ? { file, match } : null));
   const metas = [];
   const seenIds = new Set();
   for (const item of matches) {
     if (!item || seenIds.has(item.match.imdbId)) continue;
     seenIds.add(item.match.imdbId);
-    metas.push(toCatalogItem(item.match, type, item.file));
-    if (metas.length >= 40) break;
+    metas.push(toCatalogItem(item.match, type, item.file, item.file._recentRank));
+    if (metas.length >= 60) break;
   }
-  const value = { metas, filesScanned: files.length, matched: metas.length, source: 'webshare-recent' };
+  const value = { metas, filesScanned: files.length, matched: metas.length, source: 'webshare-recent-v2' };
   cache.set(cacheKey, { at: Date.now(), value });
   return value;
 }
@@ -179,8 +207,8 @@ function install(runtime) {
     if (!TARGET_IDS.has(req.params.id)) return runtime.sendCatalog(req, res);
     try {
       const recent = await providerRecent(runtime, req);
-      if (recent?.metas?.length >= 6) {
-        res.set('Cache-Control', 'private, max-age=180');
+      if (recent?.metas?.length) {
+        res.set('Cache-Control', 'private, max-age=120');
         console.log('[provider-recent-catalog]', JSON.stringify({ id: req.params.id, type: req.params.type, filesScanned: recent.filesScanned, matched: recent.matched }));
         return res.json({ metas: recent.metas });
       }
