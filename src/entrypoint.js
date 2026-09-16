@@ -95,20 +95,21 @@ const concertRuntime = require('./concert-direct-catalog')(providerRuntime);
 const enrichedConcertRuntime = require('./concert-metadata-overlay')(concertRuntime);
 const referenceConcertRuntime = require('./concert-reference-catalog')(enrichedConcertRuntime);
 const concertCompatRuntime = require('./concert-discovery-compat')(referenceConcertRuntime);
-const superConcertRuntime = require('./concert-super-catalog')(concertCompatRuntime);
+const providerRecentRuntime = require('./provider-recent-catalog')(concertCompatRuntime);
+const superConcertRuntime = require('./concert-super-catalog')(providerRecentRuntime);
 const qualityRuntime = require('./quality-engine')(superConcertRuntime);
 
 qualityRuntime.app.get('/deploy-info', (req, res) => {
   res.set('Cache-Control', 'no-store');
   res.json({
     ok: true,
-    version: '7.18.2',
+    version: '7.18.4',
     entrypoint: 'src/entrypoint.js',
-    runtime: 'FastShare+Webshare unified v7182',
+    runtime: 'FastShare+Webshare unified v7184',
     configurator: 'server-side',
     manifestCompat: true,
     strictDubCatalogs: true,
-    strictDubEvidence: 'track-metadata-or-explicit-dab-dub',
+    strictDubEvidence: 'track-metadata-or-explicit-dab-dub-or-audio-codec',
     bareAudioLabelIsDub: false,
     strictSeriesDubEvidence: true,
     strictEpisodeMatching: true,
@@ -120,6 +121,8 @@ qualityRuntime.app.get('/deploy-info', (req, res) => {
     streamResponseCache: true,
     providerTimeoutFallback: true,
     providerResponseTimeoutMs: Number(process.env.PROVIDER_RESPONSE_TIMEOUT_MS || 5500),
+    providerNativeRecentCatalogs: true,
+    webshareRecentSort: true,
     diagnosticTitleRoute: true,
     repairQueue: true,
     providerNativeConcertCatalog: true,
@@ -138,7 +141,7 @@ qualityRuntime.app.get('/deploy-info', (req, res) => {
 
 function start() {
   return qualityRuntime.app.listen(PORT, () => {
-    console.log(`FastShare + Webshare Stremio addon v7.18.2 on ${PORT}`);
+    console.log(`FastShare + Webshare Stremio addon v7.18.4 on ${PORT}`);
   });
 }
 
