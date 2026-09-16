@@ -29,6 +29,8 @@ function skipOf(extra) {
   catch { return 0; }
 }
 
+function todayKey() { return new Date().toISOString().slice(0, 10); }
+
 function yearOf(meta) {
   const values = [meta?._releaseDate, meta?.released, meta?.releaseInfo, meta?.year, meta?.raw?.released, meta?.raw?.releaseInfo];
   for (const value of values) {
@@ -46,6 +48,12 @@ function releaseKey(meta) {
   }
   const y = yearOf(meta);
   return y ? `${y}-00-00` : '0000-00-00';
+}
+
+function releaseSortKey(meta) {
+  const key = releaseKey(meta);
+  const today = todayKey();
+  return key > today ? today : key;
 }
 
 function dateKey(value) {
@@ -68,25 +76,34 @@ function seriesActivityKey(meta) {
     meta?.raw?.lastAiredAt
   ];
   const videos = Array.isArray(meta?.videos) ? meta.videos : Array.isArray(meta?.raw?.videos) ? meta.raw.videos : [];
-  for (const video of videos) {
-    candidates.push(video?.released, video?.airDate, video?.aired, video?.firstAired, video?.releaseDate);
-  }
+  for (const video of videos) candidates.push(video?.released, video?.airDate, video?.aired, video?.firstAired, video?.releaseDate);
+  const today = todayKey();
   let best = '';
   for (const value of candidates) {
     const key = dateKey(value);
-    if (key && key > best) best = key;
+    if (key && key <= today && key > best) best = key;
   }
   if (best) return best;
   const filename = String(meta?.behaviorHints?.filename || '');
   const years = [...filename.matchAll(/\b(19\d{2}|20\d{2})\b/g)].map(m => Number(m[1]));
-  if (years.length) return `${Math.max(...years)}-12-31`;
-  return releaseKey(meta);
+  if (years.length) {
+    const currentYear = Number(today.slice(0, 4));
+    return `${Math.min(Math.max(...years), currentYear)}-12-31`;
+  }
+  return releaseSortKey(meta);
+}
+
+function uploadRank(meta) {
+  const ts = Number(meta?._uploadedAt || 0);
+  return Number.isFinite(ts) && ts > 0 ? ts : 0;
 }
 
 function sortNewest(metas) {
   return metas.slice().sort((a, b) => {
-    const dateCmp = releaseKey(b).localeCompare(releaseKey(a));
+    const dateCmp = releaseSortKey(b).localeCompare(releaseSortKey(a));
     if (dateCmp) return dateCmp;
+    const uploadedCmp = uploadRank(b) - uploadRank(a);
+    if (uploadedCmp) return uploadedCmp;
     const recentCmp = Number(a?._providerRecentRank ?? 999999) - Number(b?._providerRecentRank ?? 999999);
     if (recentCmp) return recentCmp;
     return normalize(a?.name || '').localeCompare(normalize(b?.name || ''));
@@ -97,9 +114,11 @@ function sortSeriesNewest(metas) {
   return metas.slice().sort((a, b) => {
     const activityCmp = seriesActivityKey(b).localeCompare(seriesActivityKey(a));
     if (activityCmp) return activityCmp;
+    const uploadedCmp = uploadRank(b) - uploadRank(a);
+    if (uploadedCmp) return uploadedCmp;
     const recentCmp = Number(a?._providerRecentRank ?? 999999) - Number(b?._providerRecentRank ?? 999999);
     if (recentCmp) return recentCmp;
-    const releaseCmp = releaseKey(b).localeCompare(releaseKey(a));
+    const releaseCmp = releaseSortKey(b).localeCompare(releaseSortKey(a));
     if (releaseCmp) return releaseCmp;
     return normalize(a?.name || '').localeCompare(normalize(b?.name || ''));
   });
@@ -107,10 +126,14 @@ function sortSeriesNewest(metas) {
 
 function sortRecentAdded(metas) {
   return metas.slice().sort((a, b) => {
+    const uploadedCmp = uploadRank(b) - uploadRank(a);
+    if (uploadedCmp) return uploadedCmp;
     const ar = Number(a?._providerRecentRank ?? 999999);
     const br = Number(b?._providerRecentRank ?? 999999);
     if (ar !== br) return ar - br;
-    const dateCmp = releaseKey(b).localeCompare(releaseKey(a));
+    const dateCmp = (a?.type === 'series' || b?.type === 'series')
+      ? seriesActivityKey(b).localeCompare(seriesActivityKey(a))
+      : releaseSortKey(b).localeCompare(releaseSortKey(a));
     if (dateCmp) return dateCmp;
     return normalize(a?.name || '').localeCompare(normalize(b?.name || ''));
   });
@@ -136,6 +159,19 @@ function dedupe(metas, limit = 120) {
     if (out.length >= limit) break;
   }
   return out;
+}
+
+function orderSummary(id, metas) {
+  return (metas || []).slice(0, 12).map((m, index) => ({
+    p: index + 1,
+    name: String(m?.name || '').slice(0, 60),
+    release: releaseKey(m),
+    effectiveRelease: releaseSortKey(m),
+    ...(String(m?.type || '') === 'series' || id.includes('series') ? { activity: seriesActivityKey(m) } : {}),
+    uploadedAt: uploadRank(m) ? new Date(uploadRank(m)).toISOString().slice(0, 10) : '',
+    recent: Number.isFinite(Number(m?._providerRecentRank)) ? Number(m._providerRecentRank) : null,
+    native: m?._nativeLocale || ''
+  }));
 }
 
 async function capturePreviousCatalog(runtime, req) {
@@ -174,7 +210,7 @@ async function capturePreviousCatalog(runtime, req) {
 
 async function nativeOriginals(runtime, req) {
   const type = req.params.type;
-  const key = `native-v4:${type}`;
+  const key = `native-v5:${type}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL) return hit.value;
 
@@ -237,7 +273,7 @@ function encodeConcertId(title) {
 
 async function supplementalConcerts(runtime, req) {
   const cfg = runtime.unifiedConfig ? runtime.unifiedConfig(req) : {};
-  const key = `concert-extra-v4:${cfg?.fastshare?.username || ''}|${cfg?.webshare?.username || ''}`;
+  const key = `concert-extra-v5:${cfg?.fastshare?.username || ''}|${cfg?.webshare?.username || ''}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL) return hit.value;
 
@@ -370,7 +406,8 @@ function install(runtime) {
     try {
       const result = await buildFinal(runtime, req);
       res.set('Cache-Control', 'no-store, max-age=0');
-      console.log('[catalog-finalizer-v4]', JSON.stringify({ id, type: req.params.type, count: result?.metas?.length || 0, ...(result?._debug || {}) }));
+      console.log('[catalog-finalizer-v5]', JSON.stringify({ id, type: req.params.type, count: result?.metas?.length || 0, ...(result?._debug || {}) }));
+      if (TARGET_IDS.has(id)) console.log('[catalog-order-v5]', JSON.stringify({ id, top: orderSummary(id, result?.metas || []) }));
       return res.json({ metas: result?.metas || [] });
     } catch (error) {
       console.error('[catalog-finalizer-error]', String(error?.message || error));
