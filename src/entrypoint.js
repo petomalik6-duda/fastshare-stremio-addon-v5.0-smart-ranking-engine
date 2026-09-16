@@ -99,14 +99,15 @@ const providerRecentRuntime = require('./provider-recent-catalog')(concertCompat
 const superConcertRuntime = require('./concert-super-catalog')(providerRecentRuntime);
 const mergedCatalogRuntime = require('./provider-recent-merge')(superConcertRuntime);
 const qualityRuntime = require('./quality-engine')(mergedCatalogRuntime);
+const finalRuntime = require('./catalog-finalizer')(qualityRuntime);
 
-qualityRuntime.app.get('/deploy-info', (req, res) => {
+finalRuntime.app.get('/deploy-info', (req, res) => {
   res.set('Cache-Control', 'no-store');
   res.json({
     ok: true,
-    version: '7.18.5',
+    version: '7.18.6',
     entrypoint: 'src/entrypoint.js',
-    runtime: 'FastShare+Webshare unified v7185',
+    runtime: 'FastShare+Webshare unified v7186',
     configurator: 'server-side',
     manifestCompat: true,
     strictDubCatalogs: true,
@@ -124,6 +125,10 @@ qualityRuntime.app.get('/deploy-info', (req, res) => {
     providerResponseTimeoutMs: Number(process.env.PROVIDER_RESPONSE_TIMEOUT_MS || 5500),
     providerNativeRecentCatalogs: true,
     providerRecentMergedWithFallback: true,
+    catalogFinalizer: true,
+    catalogSortedByReleaseDate: true,
+    nativeCzSkOriginalsIncluded: true,
+    expandedConcertDiscovery: true,
     catalogDiagnostics: true,
     webshareRecentSort: true,
     diagnosticTitleRoute: true,
@@ -143,15 +148,15 @@ qualityRuntime.app.get('/deploy-info', (req, res) => {
 });
 
 function start() {
-  return qualityRuntime.app.listen(PORT, () => {
-    console.log(`FastShare + Webshare Stremio addon v7.18.5 on ${PORT}`);
+  return finalRuntime.app.listen(PORT, () => {
+    console.log(`FastShare + Webshare Stremio addon v7.18.6 on ${PORT}`);
   });
 }
 
 if (require.main === module) start();
 
 module.exports = {
-  ...qualityRuntime,
+  ...finalRuntime,
   start,
   canonicalSeriesNearCollision,
   explicitMovieYearCollision,
