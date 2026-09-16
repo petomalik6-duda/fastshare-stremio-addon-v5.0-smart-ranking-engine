@@ -30,6 +30,13 @@ const PROFILE = [
     requireDub: false
   },
   {
+    id: 'unified-concerts-new',
+    type: 'movie',
+    name: '🆕 Nové koncerty',
+    source: 'concerts',
+    requireDub: false
+  },
+  {
     id: 'unified-concerts',
     type: 'movie',
     name: '🎵 Koncerty',
