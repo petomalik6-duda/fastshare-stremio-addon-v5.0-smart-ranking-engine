@@ -41,12 +41,8 @@ function md5crypt(password, saltInput) {
 
   let initial = Buffer.concat([passwordBuf, magicBuf, saltBuf]);
   const alt = md5([passwordBuf, saltBuf, passwordBuf]);
-  for (let left = passwordBuf.length; left > 0; left -= 16) {
-    initial = Buffer.concat([initial, alt.subarray(0, Math.min(16, left))]);
-  }
-  for (let i = passwordBuf.length; i > 0; i >>= 1) {
-    initial = Buffer.concat([initial, (i & 1) ? Buffer.from([0]) : passwordBuf.subarray(0, 1)]);
-  }
+  for (let left = passwordBuf.length; left > 0; left -= 16) initial = Buffer.concat([initial, alt.subarray(0, Math.min(16, left))]);
+  for (let i = passwordBuf.length; i > 0; i >>= 1) initial = Buffer.concat([initial, (i & 1) ? Buffer.from([0]) : passwordBuf.subarray(0, 1)]);
 
   let final = md5([initial]);
   for (let i = 0; i < 1000; i++) {
@@ -92,6 +88,7 @@ function parseFiles(xml) {
       size: Number(tag(block, 'size') || 0),
       ext: tag(block, 'type') || (name.includes('.') ? name.split('.').pop() : ''),
       image: tag(block, 'img'),
+      created: tag(block, 'created') || tag(block, 'uploaded') || '',
       positiveVotes: Number(tag(block, 'positive_votes') || 0),
       negativeVotes: Number(tag(block, 'negative_votes') || 0),
       passwordProtected: tag(block, 'password') === '1',
@@ -103,9 +100,7 @@ function parseFiles(xml) {
 
 async function post(endpoint, params, timeoutMs) {
   const body = new URLSearchParams();
-  for (const [key, value] of Object.entries(params || {})) {
-    if (value !== undefined && value !== null) body.set(key, String(value));
-  }
+  for (const [key, value] of Object.entries(params || {})) if (value !== undefined && value !== null) body.set(key, String(value));
   const res = await fetchWithTimeout(`${API}/${endpoint}/`, {
     method: 'POST',
     headers: {
@@ -130,9 +125,7 @@ async function login(creds) {
 
   try {
     const saltResponse = await post('salt', { username_or_email: username }, LOGIN_TIMEOUT_MS);
-    if (tag(saltResponse.text, 'status') !== 'OK') {
-      return { ok: false, stage: 'salt', error: tag(saltResponse.text, 'message') || 'Webshare salt failed' };
-    }
+    if (tag(saltResponse.text, 'status') !== 'OK') return { ok: false, stage: 'salt', error: tag(saltResponse.text, 'message') || 'Webshare salt failed' };
     const salt = tag(saltResponse.text, 'salt');
     const passwordHash = crypto.createHash('sha1').update(md5crypt(password, salt)).digest('hex');
 
@@ -159,20 +152,23 @@ async function login(creds) {
   }
 }
 
-async function searchWebshare(term, token) {
+async function searchWebshare(term, token, options = {}) {
   const cleanTerm = String(term || '').trim();
+  const sort = ['recent', 'rating', 'largest', 'smallest'].includes(String(options.sort || '')) ? String(options.sort) : 'rating';
+  const limit = Math.max(1, Math.min(200, Number(options.limit || 200)));
+  const offset = Math.max(0, Number(options.offset || 0));
   if (!cleanTerm || !token) return { term: cleanTerm, status: 0, resultCount: 0, files: [], error: 'missing term or session' };
   const account = crypto.createHash('sha1').update(token).digest('hex').slice(0, 16);
-  const cacheKey = `${account}:${normalize(cleanTerm)}`;
+  const cacheKey = `${account}:${sort}:${limit}:${offset}:${normalize(cleanTerm)}`;
   const cached = getFreshCache(searchCache, cacheKey, SEARCH_CACHE_TTL_MS);
   if (cached) return { ...cached, cache: 'hit' };
 
   try {
     const { res, text } = await post('search', {
       what: cleanTerm,
-      sort: 'rating',
-      limit: 200,
-      offset: 0,
+      sort,
+      limit,
+      offset,
       category: 'video',
       wst: token
     }, SEARCH_TIMEOUT_MS);
@@ -180,6 +176,7 @@ async function searchWebshare(term, token) {
     const files = ok ? parseFiles(text) : [];
     const value = {
       term: cleanTerm,
+      sort,
       status: res.status,
       resultCount: files.length,
       total: Number(tag(text, 'total') || files.length),
@@ -195,6 +192,7 @@ async function searchWebshare(term, token) {
   } catch (error) {
     return {
       term: cleanTerm,
+      sort,
       status: 0,
       resultCount: 0,
       files: [],
@@ -203,6 +201,10 @@ async function searchWebshare(term, token) {
       cache: 'miss'
     };
   }
+}
+
+function searchWebshareRecent(term, token, options = {}) {
+  return searchWebshare(term, token, { ...options, sort: 'recent' });
 }
 
 async function streamUrl(file, token) {
@@ -222,4 +224,4 @@ async function streamUrl(file, token) {
   }
 }
 
-module.exports = { login, searchWebshare, streamUrl, md5crypt, parseFiles, tag };
+module.exports = { login, searchWebshare, searchWebshareRecent, streamUrl, md5crypt, parseFiles, tag };
