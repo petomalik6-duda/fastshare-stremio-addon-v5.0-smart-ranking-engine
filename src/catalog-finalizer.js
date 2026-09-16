@@ -104,7 +104,14 @@ function sortNewest(metas) { return sortRelease(metas); }
 
 function strongDubMeta(meta) {
   const locale = String(meta?._nativeLocale || '').toLowerCase();
-  if (locale === 'cz' || locale === 'sk') return true;
+  if (locale === 'cz' || locale === 'sk') {
+    const rawDate = String(meta?._releaseDate || meta?.released || meta?.raw?.released || '').slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(rawDate)) {
+      const cutoff = new Date(Date.now() - 730 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      return rawDate >= cutoff && rawDate <= todayKey();
+    }
+    return yearOf(meta) >= new Date().getFullYear() - 1;
+  }
   const filename = String(meta?.behaviorHints?.filename || '');
   if (!filename) return false;
   return hasCzSkAudio({ name: filename, audio: meta?._audioEvidence });
@@ -182,7 +189,10 @@ async function nativeOriginals(runtime, req) {
 
   let bases = [];
   try { bases = await tmdbLocalCandidates(type, 0); } catch { bases = []; }
-  const recent = bases.filter(base => yearOf(base) >= new Date().getFullYear() - 4).slice(0, 90);
+  // The dubbed "new releases" catalogs use the same two-year discovery
+  // horizon as the main TMDB candidate pool. Native-locale metadata alone is
+  // not dubbing evidence and is filtered out by strongDubMeta below.
+  const recent = bases.filter(base => yearOf(base) >= new Date().getFullYear() - 2).slice(0, 90);
 
   const rows = await mapWithConcurrency(recent, 5, async base => {
     try {
@@ -384,3 +394,4 @@ function install(runtime) {
 }
 
 module.exports = install;
+module.exports.strongDubMeta = strongDubMeta;
