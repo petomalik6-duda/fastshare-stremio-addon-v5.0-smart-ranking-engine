@@ -35,3 +35,11 @@ test('requested candidates do not substitute for availability and do not leak in
   assert.deepEqual(await requestedCandidates('movie', async () => { throw Error('metadata unavailable'); }), []);
   assert.deepEqual(rankFiles([], { type: 'movie', title: 'Už vidím světlo', year: '2024' }, 'movie'), []);
 });
+
+test('requested localized candidates retain all normalized alias search terms', () => {
+  const { searchTermPlan } = require('../src/ranking');
+  const meta = { title: "I'm Beginning To See the Light", year: '2024', localizedAliases: ['Už vidím světlo'] };
+  const plan = searchTermPlan(meta);
+  assert.ok(plan.fallback.includes('uz vidim svetlo'));
+  assert.ok(plan.fallback.includes('vidim svetlo'));
+});

@@ -281,7 +281,13 @@ async function availabilityForMeta(meta, type, def, auth, base = null) {
 
   const plan = searchTermPlan(meta);
   const terms = [...new Set([...(plan.primary || []), ...(plan.fallback || [])].filter(Boolean))];
-  const maxTerms = def.source === 'concerts' ? 1 : def.quality ? 5 : def.source === 'latest' ? 4 : 2;
+  // A title recovered from the localized/provider fallback must try every
+  // normalized alias. Its exact Czech filename may only match the fallback
+  // spelling (for example, without accents), while the regular discovery pool
+  // keeps the cheaper bounded scan.
+  const maxTerms = base?._requestedCatalog
+    ? Math.min(12, terms.length)
+    : def.source === 'concerts' ? 1 : def.quality ? 5 : def.source === 'latest' ? 4 : 2;
   const [fastFiles, webFiles] = await Promise.all([
     searchOneProvider(terms, 'fastshare', auth.fastshare, maxTerms),
     searchOneProvider(terms, 'webshare', auth.webshare, maxTerms)
