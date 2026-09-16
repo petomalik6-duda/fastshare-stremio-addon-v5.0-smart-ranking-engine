@@ -26,9 +26,9 @@ function installManifestCompat(runtime) {
   function manifest(configToken = null) {
     return {
       id: 'community.fastshare.webshare.unified',
-      version: '7.18.8',
+      version: '7.18.9',
       name: 'FastShare + Webshare',
-      description: 'Unified FastShare/Webshare addon with catalog finalizer fixed to reuse previous provider/TMDB results instead of rebuilding them, no-store catalog responses, CZ/SK originals and concert ordering.',
+      description: 'Unified FastShare/Webshare addon with dual-provider recent catalog discovery, FastShare fallback when Webshare recent is unavailable, no-store catalog responses, CZ/SK originals and concert ordering.',
       logo: 'https://www.stremio.com/website/stremio-logo-small.png',
       resources: ['catalog', 'meta', 'stream'],
       types: ['movie', 'series'],
@@ -44,7 +44,13 @@ function installManifestCompat(runtime) {
       behaviorHints: {
         configurable: true,
         configurationRequired: !configToken
-      }
+      },
+      config: [
+        { key: 'username', type: 'text', title: 'FastShare username' },
+        { key: 'password', type: 'password', title: 'FastShare password' },
+        { key: 'webshareUsername', type: 'text', title: 'Webshare username / email' },
+        { key: 'websharePassword', type: 'password', title: 'Webshare password' }
+      ]
     };
   }
 
