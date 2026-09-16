@@ -95,34 +95,38 @@ const concertRuntime = require('./concert-direct-catalog')(providerRuntime);
 const enrichedConcertRuntime = require('./concert-metadata-overlay')(concertRuntime);
 const referenceConcertRuntime = require('./concert-reference-catalog')(enrichedConcertRuntime);
 const superConcertRuntime = require('./concert-super-catalog')(referenceConcertRuntime);
+const qualityRuntime = require('./quality-engine')(superConcertRuntime);
 
-superConcertRuntime.app.get('/deploy-info', (req, res) => {
+qualityRuntime.app.get('/deploy-info', (req, res) => {
   res.set('Cache-Control', 'no-store');
   res.json({
     ok: true,
-    version: '7.15.0',
+    version: '7.18.0',
     entrypoint: 'src/entrypoint.js',
-    runtime: 'FastShare+Webshare unified v715',
+    runtime: 'FastShare+Webshare unified v718',
     configurator: 'server-side',
     manifestCompat: true,
     strictDubCatalogs: true,
+    strictDubEvidence: 'track-metadata-or-explicit-dab-dub',
+    bareAudioLabelIsDub: false,
     strictSeriesDubEvidence: true,
+    strictEpisodeMatching: true,
     falseDubSeriesBlocklist: true,
-    strictStreamAudioLabels: true,
-    fastshareUrlNormalized: true,
     combinedProviderStreams: true,
     singleStreamSourceName: true,
     providerBalanced: true,
-    streamSort: 'dubbing-desc,size-desc,provider-balanced',
-    latestCatalogsMultiPage: true,
+    streamSort: 'dub-evidence,quality,dv-hdr,remux-codec,size,provider-balanced',
+    streamResponseCache: true,
+    providerTimeoutFallback: true,
+    providerResponseTimeoutMs: Number(process.env.PROVIDER_RESPONSE_TIMEOUT_MS || 5500),
+    diagnosticTitleRoute: true,
+    repairQueue: true,
     providerNativeConcertCatalog: true,
     concertTmdbMetadata: true,
     concertWikipediaFallback: true,
     referenceConcertCatalog: true,
     concertSuperCatalog: true,
     concertDeduplication: true,
-    concertProviderUnion: true,
-    concertCategories: ['new','4k','rock','pop'],
     csfdSearchLink: true,
     renderGitCommit: process.env.RENDER_GIT_COMMIT || null,
     renderServiceName: process.env.RENDER_SERVICE_NAME || null,
@@ -131,15 +135,15 @@ superConcertRuntime.app.get('/deploy-info', (req, res) => {
 });
 
 function start() {
-  return superConcertRuntime.app.listen(PORT, () => {
-    console.log(`FastShare + Webshare Stremio addon v7.15.0 on ${PORT}`);
+  return qualityRuntime.app.listen(PORT, () => {
+    console.log(`FastShare + Webshare Stremio addon v7.18.0 on ${PORT}`);
   });
 }
 
 if (require.main === module) start();
 
 module.exports = {
-  ...superConcertRuntime,
+  ...qualityRuntime,
   start,
   canonicalSeriesNearCollision,
   explicitMovieYearCollision,
