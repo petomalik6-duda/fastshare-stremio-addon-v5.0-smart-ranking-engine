@@ -11,6 +11,9 @@ const VISIBLE_CATALOGS = new Set([
   'unified-latest-series',
   'unified-concerts',
   'unified-concerts-new',
+  'unified-concerts-4k',
+  'unified-concerts-rock',
+  'unified-concerts-pop',
   'unified-4k-czsk'
 ]);
 
