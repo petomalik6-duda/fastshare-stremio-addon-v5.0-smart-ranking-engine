@@ -7,7 +7,9 @@ const { login: fastshareLogin, searchFastshare } = require('./fastshare');
 const { login: webshareLogin, searchWebshare } = require('./webshare');
 
 const DUB_IDS = new Set(['unified-czsk-movies', 'unified-czsk-series']);
-const SORTED_IDS = new Set([...DUB_IDS, 'unified-latest-movies', 'unified-latest-series', 'unified-4k-czsk']);
+const LATEST_IDS = new Set(['unified-latest-movies', 'unified-latest-series']);
+const RELEASE_SORT_IDS = new Set([...DUB_IDS, 'unified-4k-czsk']);
+const TARGET_IDS = new Set([...RELEASE_SORT_IDS, ...LATEST_IDS]);
 const CONCERT_IDS = new Set(['unified-concerts', 'unified-concerts-new']);
 const CACHE_TTL = 10 * 60 * 1000;
 const cache = new Map();
@@ -15,10 +17,11 @@ const cache = new Map();
 const CONCERT_TERMS = [
   'concert', 'koncert', 'live concert', 'live performance', 'world tour', 'tour live',
   'unplugged', 'festival', 'live at', 'live in', 'music live', 'blu-ray concert',
-  'Rock in Rio', 'Wembley live', 'Glastonbury live', 'MTV Unplugged'
+  'Rock in Rio', 'Wembley live', 'Glastonbury live', 'MTV Unplugged',
+  'arena live', 'stadium live', 'live tour', 'music festival', 'full concert'
 ];
-const CONCERT_RX = /\b(concert|koncert|live\s+(at|in|from)|live\s+performance|world\s+tour|tour\s+live|unplugged|festival|rock\s+in\s+rio|wembley|glastonbury)\b/i;
-const BAD_CONCERT_RX = /\b(documentary|interview|behind\s+the\s+scenes|music\s+video|videoclip|sample|trailer|teaser)\b/i;
+const CONCERT_RX = /\b(concert|koncert|live\s+(at|in|from)|live\s+performance|world\s+tour|tour\s+live|live\s+tour|unplugged|festival|rock\s+in\s+rio|wembley|glastonbury|arena\s+live|stadium\s+live|full\s+concert)\b/i;
+const BAD_CONCERT_RX = /\b(documentary|document|interview|behind\s+the\s+scenes|music\s+video|videoclip|sample|trailer|teaser|karaoke)\b/i;
 
 function skipOf(extra) {
   if (!extra) return 0;
@@ -49,11 +52,24 @@ function sortNewest(metas) {
   return metas.slice().sort((a, b) => {
     const dateCmp = releaseKey(b).localeCompare(releaseKey(a));
     if (dateCmp) return dateCmp;
+    const recentCmp = Number(a?._providerRecentRank ?? 999999) - Number(b?._providerRecentRank ?? 999999);
+    if (recentCmp) return recentCmp;
     return String(a?.name || '').localeCompare(String(b?.name || ''));
   });
 }
 
-function dedupe(metas, limit = 80) {
+function sortRecentAdded(metas) {
+  return metas.slice().sort((a, b) => {
+    const ar = Number(a?._providerRecentRank ?? 999999);
+    const br = Number(b?._providerRecentRank ?? 999999);
+    if (ar !== br) return ar - br;
+    const dateCmp = releaseKey(b).localeCompare(releaseKey(a));
+    if (dateCmp) return dateCmp;
+    return String(a?.name || '').localeCompare(String(b?.name || ''));
+  });
+}
+
+function dedupe(metas, limit = 100) {
   const out = [];
   const seen = new Set();
   for (const item of metas) {
@@ -69,21 +85,18 @@ function dedupe(metas, limit = 80) {
 
 async function nativeOriginals(runtime, req) {
   const type = req.params.type;
-  const key = `native:${type}`;
+  const key = `native-v2:${type}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL) return hit.value;
 
   let bases = [];
   try { bases = await tmdbLocalCandidates(type, 0); } catch { bases = []; }
-  const recent = bases.filter(base => yearOf(base) >= new Date().getFullYear() - 3).slice(0, 70);
+  const recent = bases.filter(base => yearOf(base) >= new Date().getFullYear() - 4).slice(0, 90);
 
-  const rows = await mapWithConcurrency(recent, 4, async base => {
+  const rows = await mapWithConcurrency(recent, 5, async base => {
     try {
       const meta = await getMeta(type, base.id);
-      const fakeReq = {
-        ...req,
-        params: { ...(req.params || {}), type, id: base.id }
-      };
+      const fakeReq = { ...req, params: { ...(req.params || {}), type, id: base.id } };
       const response = typeof runtime.buildQualityResponse === 'function'
         ? await runtime.buildQualityResponse(fakeReq)
         : { streams: [] };
@@ -100,6 +113,7 @@ async function nativeOriginals(runtime, req) {
         releaseInfo: raw.releaseInfo || base.releaseInfo,
         year: raw.year || base.year,
         _releaseDate: base._releaseDate,
+        _nativeLocale: base._nativeLocale,
         behaviorHints: {
           ...(raw.behaviorHints || {}),
           ...(type === 'movie' ? { defaultVideoId: raw.id || meta.imdbId || base.id } : {})
@@ -132,7 +146,7 @@ function encodeConcertId(title) {
 
 async function supplementalConcerts(runtime, req) {
   const cfg = runtime.unifiedConfig ? runtime.unifiedConfig(req) : {};
-  const key = `concert-extra:${cfg?.fastshare?.username || ''}|${cfg?.webshare?.username || ''}`;
+  const key = `concert-extra-v2:${cfg?.fastshare?.username || ''}|${cfg?.webshare?.username || ''}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL) return hit.value;
 
@@ -142,8 +156,8 @@ async function supplementalConcerts(runtime, req) {
   ]);
 
   const [fr, wr] = await Promise.all([
-    fa.ok ? mapWithConcurrency(CONCERT_TERMS, 4, term => searchFastshare(term, fa.hash)) : [],
-    wa.ok ? mapWithConcurrency(CONCERT_TERMS, 4, term => searchWebshare(term, wa.token)) : []
+    fa.ok ? mapWithConcurrency(CONCERT_TERMS, 5, term => searchFastshare(term, fa.hash)) : [],
+    wa.ok ? mapWithConcurrency(CONCERT_TERMS, 5, term => searchWebshare(term, wa.token)) : []
   ]);
 
   const files = [
@@ -151,7 +165,7 @@ async function supplementalConcerts(runtime, req) {
     ...(wr || []).flatMap(r => (r.files || []).map(f => ({ ...f, provider: 'Webshare' })))
   ].filter(file => {
     const name = String(file?.name || '');
-    return CONCERT_RX.test(name) && !BAD_CONCERT_RX.test(name) && (Number(file?.size || 0) > 150 * 1024 * 1024 || /\.(mkv|mp4|avi|mov|m4v)(?:$|[?\s])/i.test(name));
+    return CONCERT_RX.test(name) && !BAD_CONCERT_RX.test(name) && (Number(file?.size || 0) > 120 * 1024 * 1024 || /\.(mkv|mp4|avi|mov|m4v)(?:$|[?\s])/i.test(name));
   });
 
   const byKey = new Map();
@@ -165,8 +179,8 @@ async function supplementalConcerts(runtime, req) {
     }
   }
 
-  const rawRows = [...byKey.values()].slice(0, 180);
-  const enriched = await mapWithConcurrency(rawRows, 5, async row => {
+  const rawRows = [...byKey.values()].slice(0, 240);
+  const enriched = await mapWithConcurrency(rawRows, 6, async row => {
     try {
       let meta = null;
       if (typeof runtime.enrichConcertWithWikipedia === 'function') meta = await runtime.enrichConcertWithWikipedia(row);
@@ -195,17 +209,22 @@ async function supplementalConcerts(runtime, req) {
 async function buildFinal(runtime, req) {
   const id = req.params.id;
   let base = { metas: [] };
-  if (typeof runtime.buildMergedCatalog === 'function' && SORTED_IDS.has(id)) {
+  if (typeof runtime.buildMergedCatalog === 'function' && TARGET_IDS.has(id)) {
     base = await runtime.buildMergedCatalog(req);
   }
 
   if (DUB_IDS.has(id)) {
     const natives = await nativeOriginals(runtime, req);
-    return { metas: sortNewest(dedupe([...(base.metas || []), ...natives], 80)).slice(0, 40) };
+    const foreign = Array.isArray(base.metas) ? base.metas : [];
+    return { metas: sortNewest(dedupe([...foreign, ...natives], 100)).slice(0, 40) };
   }
 
-  if (SORTED_IDS.has(id)) {
-    return { metas: sortNewest(dedupe(base.metas || [], 80)).slice(0, 40) };
+  if (LATEST_IDS.has(id)) {
+    return { metas: sortRecentAdded(dedupe(base.metas || [], 100)).slice(0, 40) };
+  }
+
+  if (id === 'unified-4k-czsk') {
+    return { metas: sortNewest(dedupe(base.metas || [], 100)).slice(0, 40) };
   }
 
   if (CONCERT_IDS.has(id)) {
@@ -213,7 +232,7 @@ async function buildFinal(runtime, req) {
       typeof runtime.buildConcertPool === 'function' ? runtime.buildConcertPool(req).catch(() => []) : Promise.resolve([]),
       supplementalConcerts(runtime, req)
     ]);
-    const poolMetas = await mapWithConcurrency((pool || []).slice(0, 160), 5, async row => {
+    const poolMetas = await mapWithConcurrency((pool || []).slice(0, 220), 6, async row => {
       try {
         let meta = null;
         if (typeof runtime.enrichConcertWithWikipedia === 'function') meta = await runtime.enrichConcertWithWikipedia(row);
@@ -221,12 +240,22 @@ async function buildFinal(runtime, req) {
         meta = meta || row;
         const title = row.title || row.name || meta.name;
         const cid = encodeConcertId(title);
-        return { ...meta, id: cid, type: 'movie', name: meta.name || title, behaviorHints: { ...(meta.behaviorHints || {}), defaultVideoId: cid, ...(row.filename ? { filename: row.filename } : {}) } };
+        return {
+          ...meta,
+          id: cid,
+          type: 'movie',
+          name: meta.name || title,
+          releaseInfo: meta.releaseInfo || row._year || yearOf(row) || '',
+          behaviorHints: { ...(meta.behaviorHints || {}), defaultVideoId: cid, ...(row.filename ? { filename: row.filename } : {}) }
+        };
       } catch { return null; }
     });
-    let metas = dedupe([...(poolMetas.filter(Boolean)), ...extra], 120);
-    if (id === 'unified-concerts-new') metas = sortNewest(metas);
-    else metas = metas.sort((a, b) => yearOf(b) - yearOf(a) || String(a.name || '').localeCompare(String(b.name || '')));
+    let metas = dedupe([...(poolMetas.filter(Boolean)), ...extra], 160);
+    if (id === 'unified-concerts-new') {
+      metas = sortNewest(metas);
+    } else {
+      metas = metas.sort((a, b) => normalize(a?.name || '').localeCompare(normalize(b?.name || '')) || yearOf(b) - yearOf(a));
+    }
     const skip = skipOf(req.params.extra);
     return { metas: metas.slice(skip, skip + 40) };
   }
@@ -245,11 +274,11 @@ function install(runtime) {
 
   async function sendCatalog(req, res) {
     const id = req.params.id;
-    if (!SORTED_IDS.has(id) && !CONCERT_IDS.has(id)) return runtime.sendCatalog(req, res);
+    if (!TARGET_IDS.has(id) && !CONCERT_IDS.has(id)) return runtime.sendCatalog(req, res);
     try {
       const result = await buildFinal(runtime, req);
-      res.set('Cache-Control', 'private, max-age=120');
-      console.log('[catalog-finalizer]', JSON.stringify({ id, type: req.params.type, count: result?.metas?.length || 0 }));
+      res.set('Cache-Control', 'private, max-age=90');
+      console.log('[catalog-finalizer-v2]', JSON.stringify({ id, type: req.params.type, count: result?.metas?.length || 0 }));
       return res.json(result || { metas: [] });
     } catch (error) {
       console.error('[catalog-finalizer-error]', String(error?.message || error));
