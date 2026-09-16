@@ -105,9 +105,9 @@ finalRuntime.app.get('/deploy-info', (req, res) => {
   res.set('Cache-Control', 'no-store');
   res.json({
     ok: true,
-    version: '7.18.7',
+    version: '7.18.8',
     entrypoint: 'src/entrypoint.js',
-    runtime: 'FastShare+Webshare unified v7187',
+    runtime: 'FastShare+Webshare unified v7188',
     configurator: 'server-side',
     manifestCompat: true,
     strictDubCatalogs: true,
@@ -126,6 +126,8 @@ finalRuntime.app.get('/deploy-info', (req, res) => {
     providerNativeRecentCatalogs: true,
     providerRecentMergedWithFallback: true,
     catalogFinalizer: true,
+    catalogFinalizerMode: 'reuse-previous-catalog-output',
+    catalogCacheControl: 'no-store',
     dubbedCatalogSort: 'release-date-desc',
     latestAddedCatalogSort: 'provider-recent-first',
     nativeCzSkOriginalsIncluded: true,
@@ -152,7 +154,7 @@ finalRuntime.app.get('/deploy-info', (req, res) => {
 
 function start() {
   return finalRuntime.app.listen(PORT, () => {
-    console.log(`FastShare + Webshare Stremio addon v7.18.7 on ${PORT}`);
+    console.log(`FastShare + Webshare Stremio addon v7.18.8 on ${PORT}`);
   });
 }
 
