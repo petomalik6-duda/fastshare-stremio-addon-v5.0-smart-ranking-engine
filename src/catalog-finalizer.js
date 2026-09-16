@@ -18,6 +18,7 @@ const CONCERT_IDS = new Set(['unified-concerts', 'unified-concerts-new']);
 const CACHE_TTL = 10 * 60 * 1000;
 const cache = new Map();
 const { SnapshotCache } = require('./catalog-order');
+const { isDisplayableMeta } = require('./catalog-policy');
 const snapshots = new SnapshotCache(CACHE_TTL, 80);
 function accountKey(runtime, req) {
   const cfg = runtime.unifiedConfig ? runtime.unifiedConfig(req) : {};
@@ -341,7 +342,7 @@ async function buildFinal(runtime, req) {
         capturePreviousCatalog(runtime, unpaged),
         DUB_IDS.has(id) ? nativeOriginals(runtime, unpaged) : Promise.resolve([])
       ]);
-      const candidates = [...(base?.metas || []), ...natives];
+      const candidates = [...(base?.metas || []), ...natives].filter(isDisplayableMeta);
       const eligible = RELEASE_SORT_IDS.has(id) ? candidates.filter(strongDubMeta) : candidates;
       const mode = id === 'unified-czsk-movies' || id === 'unified-4k-czsk' ? 'release' : 'added';
       return finalizePage(eligible, { mode, skip: 0, limit: Infinity });

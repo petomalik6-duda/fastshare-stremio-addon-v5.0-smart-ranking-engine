@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { strongDubMeta } = require('../src/catalog-finalizer');
+const { isDisplayableMeta } = require('../src/catalog-policy');
 
 test('dubbed new-release catalog keeps a recent Czech original', () => {
   assert.equal(strongDubMeta({ _nativeLocale: 'cz', _releaseDate: '2026-01-15', behaviorHints: { filename: 'Film 2026.mkv' } }), true);
@@ -30,4 +31,9 @@ test('requested recovered title keeps provider-verified availability', () => {
 
 test('series with a recent available episode is retained despite an old premiere', () => {
   assert.equal(strongDubMeta({ type: 'series', _releaseDate: '2010-01-15', _availableEpisodeDate: '2026-09-10', behaviorHints: { filename: 'Show S04E01 CZ dabing.mkv' } }), true);
+});
+
+test('catalog never exposes an IMDb id as the visible title', () => {
+  assert.equal(isDisplayableMeta({ id: 'tt123', name: 'tt123' }), false);
+  assert.equal(isDisplayableMeta({ id: 'tt123', name: 'Skutočný názov' }), true);
 });
