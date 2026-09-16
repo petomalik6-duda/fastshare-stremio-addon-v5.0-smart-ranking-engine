@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const ranking = require('./ranking');
+const { buildConcertStreams } = require('./concert-stream-helper');
 
 const STREAM_CACHE_TTL_MS = Number(process.env.STREAM_RESPONSE_CACHE_TTL_MS || 1000 * 60 * 3);
 const STREAM_CACHE_MAX = Number(process.env.STREAM_RESPONSE_CACHE_MAX || 500);
@@ -81,8 +82,6 @@ function seriesStreamMatches(stream, id) {
   if (parsed.episodes?.length) {
     return parsed.episodes.some(entry => entry.season === target.season && entry.episodes.includes(target.episode));
   }
-  // For a concrete episode request, season packs and loose series releases are not
-  // returned as direct episode streams. This removes a common source of wrong playback.
   return false;
 }
 
@@ -91,7 +90,9 @@ function normalizeStream(stream, runtime) {
   const provider = providerOf(sanitized);
   const hints = {
     ...(sanitized?.behaviorHints || {}),
-    bingeGroup: 'fastshare-webshare-unified'
+    bingeGroup: String(sanitized?.behaviorHints?.bingeGroup || '').includes('concert')
+      ? 'fastshare-webshare-unified-concert'
+      : 'fastshare-webshare-unified'
   };
   return {
     ...sanitized,
@@ -137,6 +138,32 @@ async function buildQualityResponse(runtime, req, debug = false) {
   if (!debug) {
     const hit = cacheGet(key);
     if (hit) return { ...hit, cache: 'hit' };
+  }
+
+  if (String(req.params?.id || '').startsWith('concert:')) {
+    const concert = await withTimeout(buildConcertStreams(runtime, req), PROVIDER_RESPONSE_TIMEOUT_MS * 2, 'Concert providers');
+    const normalized = (concert?.streams || []).map(stream => normalizeStream(stream, runtime));
+    const streams = balancedSort(normalized);
+    const result = { streams, cache: 'miss', concert: true };
+    if (!streams.length) {
+      repairQueue.set(`${req.params?.type}:${req.params?.id}`, {
+        at: Date.now(), type: req.params?.type, id: req.params?.id, reason: concert?.timedOut ? 'concert-provider-timeout' : 'concert-no-matching-stream'
+      });
+    } else repairQueue.delete(`${req.params?.type}:${req.params?.id}`);
+    if (!debug) {
+      cacheSet(key, result);
+      return result;
+    }
+    return {
+      ok: true,
+      type: req.params.type,
+      id: req.params.id,
+      concert: true,
+      finalStreamCount: streams.length,
+      streams,
+      error: concert?.error || null,
+      repairQueued: repairQueue.has(`${req.params?.type}:${req.params?.id}`)
+    };
   }
 
   const [fastshare, webshare] = await Promise.all([
