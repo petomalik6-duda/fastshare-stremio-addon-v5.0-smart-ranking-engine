@@ -1,6 +1,6 @@
 'use strict';
 
-const { tmdbLocalCandidates } = require('./catalogs');
+const { tmdbLocalCandidates, hasCzSkAudio } = require('./catalogs');
 const { getMeta } = require('./metadata');
 const { mapWithConcurrency, normalize } = require('./utils');
 const { login: fastshareLogin, searchFastshare } = require('./fastshare');
@@ -48,12 +48,59 @@ function releaseKey(meta) {
   return y ? `${y}-00-00` : '0000-00-00';
 }
 
+function dateKey(value) {
+  const s = String(value || '').trim();
+  const iso = s.match(/^(19\d{2}|20\d{2})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const parsed = Date.parse(s);
+  if (Number.isFinite(parsed)) return new Date(parsed).toISOString().slice(0, 10);
+  return '';
+}
+
+function seriesActivityKey(meta) {
+  const candidates = [
+    meta?._seriesActivityDate,
+    meta?.last_air_date,
+    meta?.lastAired,
+    meta?.lastAiredAt,
+    meta?.raw?.last_air_date,
+    meta?.raw?.lastAired,
+    meta?.raw?.lastAiredAt
+  ];
+  const videos = Array.isArray(meta?.videos) ? meta.videos : Array.isArray(meta?.raw?.videos) ? meta.raw.videos : [];
+  for (const video of videos) {
+    candidates.push(video?.released, video?.airDate, video?.aired, video?.firstAired, video?.releaseDate);
+  }
+  let best = '';
+  for (const value of candidates) {
+    const key = dateKey(value);
+    if (key && key > best) best = key;
+  }
+  if (best) return best;
+  const filename = String(meta?.behaviorHints?.filename || '');
+  const years = [...filename.matchAll(/\b(19\d{2}|20\d{2})\b/g)].map(m => Number(m[1]));
+  if (years.length) return `${Math.max(...years)}-12-31`;
+  return releaseKey(meta);
+}
+
 function sortNewest(metas) {
   return metas.slice().sort((a, b) => {
     const dateCmp = releaseKey(b).localeCompare(releaseKey(a));
     if (dateCmp) return dateCmp;
     const recentCmp = Number(a?._providerRecentRank ?? 999999) - Number(b?._providerRecentRank ?? 999999);
     if (recentCmp) return recentCmp;
+    return normalize(a?.name || '').localeCompare(normalize(b?.name || ''));
+  });
+}
+
+function sortSeriesNewest(metas) {
+  return metas.slice().sort((a, b) => {
+    const activityCmp = seriesActivityKey(b).localeCompare(seriesActivityKey(a));
+    if (activityCmp) return activityCmp;
+    const recentCmp = Number(a?._providerRecentRank ?? 999999) - Number(b?._providerRecentRank ?? 999999);
+    if (recentCmp) return recentCmp;
+    const releaseCmp = releaseKey(b).localeCompare(releaseKey(a));
+    if (releaseCmp) return releaseCmp;
     return normalize(a?.name || '').localeCompare(normalize(b?.name || ''));
   });
 }
@@ -67,6 +114,14 @@ function sortRecentAdded(metas) {
     if (dateCmp) return dateCmp;
     return normalize(a?.name || '').localeCompare(normalize(b?.name || ''));
   });
+}
+
+function strongDubMeta(meta) {
+  const locale = String(meta?._nativeLocale || '').toLowerCase();
+  if (locale === 'cz' || locale === 'sk') return true;
+  const filename = String(meta?.behaviorHints?.filename || '');
+  if (!filename) return false;
+  return hasCzSkAudio({ name: filename, audio: undefined });
 }
 
 function dedupe(metas, limit = 120) {
@@ -119,7 +174,7 @@ async function capturePreviousCatalog(runtime, req) {
 
 async function nativeOriginals(runtime, req) {
   const type = req.params.type;
-  const key = `native-v3:${type}`;
+  const key = `native-v4:${type}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL) return hit.value;
 
@@ -136,7 +191,7 @@ async function nativeOriginals(runtime, req) {
         : { streams: [] };
       if (!Array.isArray(response?.streams) || response.streams.length === 0) return null;
       const raw = meta?.raw || {};
-      return {
+      const item = {
         ...raw,
         id: raw.id || meta.imdbId || base.id,
         type,
@@ -153,6 +208,8 @@ async function nativeOriginals(runtime, req) {
           ...(type === 'movie' ? { defaultVideoId: raw.id || meta.imdbId || base.id } : {})
         }
       };
+      if (type === 'series') item._seriesActivityDate = seriesActivityKey(item);
+      return item;
     } catch { return null; }
   });
 
@@ -180,7 +237,7 @@ function encodeConcertId(title) {
 
 async function supplementalConcerts(runtime, req) {
   const cfg = runtime.unifiedConfig ? runtime.unifiedConfig(req) : {};
-  const key = `concert-extra-v3:${cfg?.fastshare?.username || ''}|${cfg?.webshare?.username || ''}`;
+  const key = `concert-extra-v4:${cfg?.fastshare?.username || ''}|${cfg?.webshare?.username || ''}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL) return hit.value;
 
@@ -249,8 +306,10 @@ async function buildFinal(runtime, req) {
 
     if (DUB_IDS.has(id)) {
       const natives = await nativeOriginals(runtime, req);
-      const merged = dedupe([...baseMetas, ...natives], 120);
-      return { metas: sortNewest(merged).slice(0, 40), _debug: { base: baseMetas.length, natives: natives.length } };
+      const foreign = baseMetas.filter(strongDubMeta);
+      const merged = dedupe([...foreign, ...natives], 120);
+      const sorted = id === 'unified-czsk-series' ? sortSeriesNewest(merged) : sortNewest(merged);
+      return { metas: sorted.slice(0, 40), _debug: { base: baseMetas.length, strongDub: foreign.length, natives: natives.length } };
     }
 
     if (LATEST_IDS.has(id)) {
@@ -258,7 +317,8 @@ async function buildFinal(runtime, req) {
     }
 
     if (id === 'unified-4k-czsk') {
-      return { metas: sortNewest(dedupe(baseMetas, 120)).slice(0, 40), _debug: { base: baseMetas.length } };
+      const strong = baseMetas.filter(strongDubMeta);
+      return { metas: sortNewest(dedupe(strong, 120)).slice(0, 40), _debug: { base: baseMetas.length, strongDub: strong.length } };
     }
   }
 
@@ -310,7 +370,7 @@ function install(runtime) {
     try {
       const result = await buildFinal(runtime, req);
       res.set('Cache-Control', 'no-store, max-age=0');
-      console.log('[catalog-finalizer-v3]', JSON.stringify({ id, type: req.params.type, count: result?.metas?.length || 0, ...(result?._debug || {}) }));
+      console.log('[catalog-finalizer-v4]', JSON.stringify({ id, type: req.params.type, count: result?.metas?.length || 0, ...(result?._debug || {}) }));
       return res.json({ metas: result?.metas || [] });
     } catch (error) {
       console.error('[catalog-finalizer-error]', String(error?.message || error));
