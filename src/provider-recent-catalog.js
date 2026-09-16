@@ -1,6 +1,7 @@
 'use strict';
 
 const { login: webshareLogin, searchWebshareRecent } = require('./webshare');
+const { login: fastshareLogin, searchFastshare } = require('./fastshare');
 const { TMDB_API_KEY, TMDB_READ_ACCESS_TOKEN, VERSION } = require('./config');
 const { fetchJson, mapWithConcurrency, normalize } = require('./utils');
 const { getMeta } = require('./metadata');
@@ -13,7 +14,7 @@ const TARGET_IDS = new Set([
   'unified-latest-series',
   'unified-4k-czsk'
 ]);
-const CACHE_TTL = Number(process.env.PROVIDER_RECENT_CACHE_TTL_MS || 5 * 60 * 1000);
+const CACHE_TTL = Number(process.env.PROVIDER_RECENT_CACHE_TTL_MS || 3 * 60 * 1000);
 const cache = new Map();
 
 function tmdbEnabled() { return Boolean(TMDB_API_KEY || TMDB_READ_ACCESS_TOKEN); }
@@ -73,7 +74,6 @@ async function matchTmdb(file, type) {
   const year = yearOf(file.name);
   const isSeries = type === 'series';
   const path = isSeries ? '/search/tv' : '/search/movie';
-
   const [withYear, withoutYear] = await Promise.all([
     tmdbSearch(path, query, year, isSeries, true),
     year ? tmdbSearch(path, query, year, isSeries, false) : Promise.resolve([])
@@ -134,6 +134,56 @@ function eligibleFile(file, id, type) {
   return true;
 }
 
+function timestampOf(file) {
+  const raw = file?.raw || {};
+  const values = [file?.created, file?.uploaded, raw.created, raw.uploaded, raw.created_at, raw.uploaded_at, raw.upload_date, raw.date, raw.added, raw.added_at, raw.timestamp];
+  for (const value of values) {
+    if (value === undefined || value === null || value === '') continue;
+    if (typeof value === 'number') return value > 1e12 ? value : value * 1000;
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 1000000000) return numeric > 1e12 ? numeric : numeric * 1000;
+    const parsed = Date.parse(String(value));
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
+}
+
+function collectResponses(responses, provider, limit = 260) {
+  const files = [];
+  const seen = new Set();
+  const maxLen = Math.max(...responses.map(r => (r?.files || []).length), 0);
+  for (let i = 0; i < maxLen && files.length < limit; i++) {
+    for (const response of responses) {
+      const file = response?.files?.[i];
+      const key = `${provider}:${file?.id || file?.ident || file?.name || ''}`;
+      if (!file || seen.has(key)) continue;
+      seen.add(key);
+      files.push({ ...file, provider, _providerSourceRank: files.length, _uploadedAt: timestampOf(file) });
+    }
+  }
+  return files;
+}
+
+function mergeProviderFiles(webFiles, fastFiles, id, type) {
+  const combined = [...webFiles, ...fastFiles].filter(file => eligibleFile(file, id, type));
+  const seen = new Set();
+  const unique = [];
+  for (const file of combined) {
+    const key = normalize(file.name || '');
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    unique.push(file);
+  }
+  unique.sort((a, b) => {
+    if (b._uploadedAt !== a._uploadedAt && (a._uploadedAt || b._uploadedAt)) return b._uploadedAt - a._uploadedAt;
+    const ap = a.provider === 'webshare' ? 0 : 1;
+    const bp = b.provider === 'webshare' ? 0 : 1;
+    if (ap !== bp) return ap - bp;
+    return a._providerSourceRank - b._providerSourceRank;
+  });
+  return unique.slice(0, 300).map((file, index) => ({ ...file, _recentRank: index }));
+}
+
 function toCatalogItem(match, type, file, recentRank) {
   const raw = match.meta?.raw || {};
   const releaseDate = String(match.row.release_date || match.row.first_air_date || '');
@@ -147,6 +197,8 @@ function toCatalogItem(match, type, file, recentRank) {
     releaseInfo: raw.releaseInfo || releaseDate.slice(0, 4),
     _releaseDate: releaseDate,
     _providerRecentRank: recentRank,
+    _providerSource: file.provider,
+    _uploadedAt: file._uploadedAt || 0,
     behaviorHints: {
       ...(raw.behaviorHints || {}),
       ...(type === 'movie' ? { defaultVideoId: match.imdbId } : {}),
@@ -159,28 +211,25 @@ async function providerRecent(runtime, req) {
   const id = req.params.id;
   const type = req.params.type;
   const cfg = runtime.unifiedConfig ? runtime.unifiedConfig(req) : {};
-  const userKey = String(cfg?.webshare?.username || '');
-  const cacheKey = `${userKey}:${type}:${id}:v2`;
+  const userKey = `${cfg?.webshare?.username || ''}|${cfg?.fastshare?.username || ''}`;
+  const cacheKey = `${userKey}:${type}:${id}:v3`;
   const hit = cache.get(cacheKey);
   if (hit && Date.now() - hit.at < CACHE_TTL) return hit.value;
 
-  const auth = await webshareLogin(cfg.webshare || {});
-  if (!auth.ok) return null;
+  const [wa, fa] = await Promise.all([
+    cfg?.webshare?.username && cfg?.webshare?.password ? webshareLogin(cfg.webshare) : Promise.resolve({ ok: false, error: 'missing credentials' }),
+    cfg?.fastshare?.username && cfg?.fastshare?.password ? fastshareLogin(cfg.fastshare) : Promise.resolve({ ok: false, error: 'missing credentials' })
+  ]);
   const terms = searchTerms(id, type);
-  const responses = await mapWithConcurrency(terms, 4, term => searchWebshareRecent(term, auth.token, { limit: 160 }));
-  const files = [];
-  const seenFile = new Set();
-  const maxLen = Math.max(...responses.map(r => (r.files || []).length), 0);
-  for (let i = 0; i < maxLen && files.length < 260; i++) {
-    for (const response of responses) {
-      const file = response.files?.[i];
-      if (!file || seenFile.has(file.id) || !eligibleFile(file, id, type)) continue;
-      seenFile.add(file.id);
-      files.push({ ...file, _recentRank: files.length });
-    }
-  }
+  const [webResponses, fastResponses] = await Promise.all([
+    wa.ok ? mapWithConcurrency(terms, 4, term => searchWebshareRecent(term, wa.token, { limit: 160 })) : Promise.resolve([]),
+    fa.ok ? mapWithConcurrency(terms, 4, term => searchFastshare(term, fa.hash)) : Promise.resolve([])
+  ]);
+  const webFiles = collectResponses(webResponses, 'webshare');
+  const fastFiles = collectResponses(fastResponses, 'fastshare');
+  const files = mergeProviderFiles(webFiles, fastFiles, id, type);
 
-  const matches = await mapWithConcurrency(files.slice(0, 180), 7, file => matchTmdb(file, type).then(match => match ? { file, match } : null));
+  const matches = await mapWithConcurrency(files.slice(0, 220), 7, file => matchTmdb(file, type).then(match => match ? { file, match } : null));
   const metas = [];
   const seenIds = new Set();
   for (const item of matches) {
@@ -189,7 +238,16 @@ async function providerRecent(runtime, req) {
     metas.push(toCatalogItem(item.match, type, item.file, item.file._recentRank));
     if (metas.length >= 60) break;
   }
-  const value = { metas, filesScanned: files.length, matched: metas.length, source: 'webshare-recent-v2' };
+  const value = {
+    metas,
+    filesScanned: files.length,
+    matched: metas.length,
+    webshareFiles: webFiles.length,
+    fastshareFiles: fastFiles.length,
+    auth: { webshare: Boolean(wa.ok), fastshare: Boolean(fa.ok) },
+    source: wa.ok && fa.ok ? 'webshare-recent+fastshare' : wa.ok ? 'webshare-recent' : fa.ok ? 'fastshare-fallback' : 'none'
+  };
+  console.log('[provider-native-scan]', JSON.stringify({ id, type, ...value.auth, source: value.source, webshareFiles: value.webshareFiles, fastshareFiles: value.fastshareFiles, eligibleFiles: files.length, matched: metas.length }));
   cache.set(cacheKey, { at: Date.now(), value });
   return value;
 }
@@ -208,8 +266,8 @@ function install(runtime) {
     try {
       const recent = await providerRecent(runtime, req);
       if (recent?.metas?.length) {
-        res.set('Cache-Control', 'private, max-age=120');
-        console.log('[provider-recent-catalog]', JSON.stringify({ id: req.params.id, type: req.params.type, filesScanned: recent.filesScanned, matched: recent.matched }));
+        res.set('Cache-Control', 'private, no-store');
+        console.log('[provider-recent-catalog]', JSON.stringify({ id: req.params.id, type: req.params.type, filesScanned: recent.filesScanned, matched: recent.matched, source: recent.source }));
         return res.json({ metas: recent.metas });
       }
     } catch (error) {
