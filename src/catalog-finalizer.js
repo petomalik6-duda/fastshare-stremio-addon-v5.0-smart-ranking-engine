@@ -51,8 +51,11 @@ function yearOf(meta) {
 }
 
 function recentRelease(meta) {
+  const dates = meta?.type === 'series'
+    ? [meta?._availableEpisodeDate, meta?._releaseDate, meta?.released, meta?.raw?.released]
+    : [meta?._releaseDate, meta?.released, meta?.raw?.released];
   const rawDate = String(
-    meta?._releaseDate || meta?._availableEpisodeDate || meta?.released || meta?.raw?.released || ''
+    dates.find(value => String(value || '').trim()) || ''
   ).slice(0, 10);
   const today = todayKey();
   if (/^\d{4}-\d{2}-\d{2}$/.test(rawDate)) {

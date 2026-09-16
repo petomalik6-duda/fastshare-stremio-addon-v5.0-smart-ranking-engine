@@ -27,3 +27,7 @@ test('provider recent upload may retain an older film release', () => {
 test('requested recovered title keeps provider-verified availability', () => {
   assert.equal(strongDubMeta({ _releaseDate: '2020-01-15', _requestedCatalog: true, behaviorHints: { filename: 'Film 2020 CZ dabing.mkv' } }), true);
 });
+
+test('series with a recent available episode is retained despite an old premiere', () => {
+  assert.equal(strongDubMeta({ type: 'series', _releaseDate: '2010-01-15', _availableEpisodeDate: '2026-09-10', behaviorHints: { filename: 'Show S04E01 CZ dabing.mkv' } }), true);
+});
