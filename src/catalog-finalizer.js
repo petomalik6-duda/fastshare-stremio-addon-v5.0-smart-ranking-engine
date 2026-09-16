@@ -54,7 +54,7 @@ function sortNewest(metas) {
     if (dateCmp) return dateCmp;
     const recentCmp = Number(a?._providerRecentRank ?? 999999) - Number(b?._providerRecentRank ?? 999999);
     if (recentCmp) return recentCmp;
-    return String(a?.name || '').localeCompare(String(b?.name || ''));
+    return normalize(a?.name || '').localeCompare(normalize(b?.name || ''));
   });
 }
 
@@ -65,14 +65,14 @@ function sortRecentAdded(metas) {
     if (ar !== br) return ar - br;
     const dateCmp = releaseKey(b).localeCompare(releaseKey(a));
     if (dateCmp) return dateCmp;
-    return String(a?.name || '').localeCompare(String(b?.name || ''));
+    return normalize(a?.name || '').localeCompare(normalize(b?.name || ''));
   });
 }
 
-function dedupe(metas, limit = 100) {
+function dedupe(metas, limit = 120) {
   const out = [];
   const seen = new Set();
-  for (const item of metas) {
+  for (const item of metas || []) {
     const id = String(item?.id || '');
     const key = id || `${normalize(item?.name || '')}|${yearOf(item)}`;
     if (!key || seen.has(key)) continue;
@@ -83,9 +83,43 @@ function dedupe(metas, limit = 100) {
   return out;
 }
 
+async function capturePreviousCatalog(runtime, req) {
+  if (typeof runtime.sendCatalog !== 'function') return { metas: [] };
+  return await new Promise(async resolve => {
+    let settled = false;
+    const finish = payload => {
+      if (settled) return;
+      settled = true;
+      if (payload && Array.isArray(payload.metas)) return resolve(payload);
+      return resolve({ metas: [] });
+    };
+    const res = {
+      set() { return this; },
+      setHeader() { return this; },
+      status() { return this; },
+      json(payload) { finish(payload); return this; },
+      send(payload) {
+        if (typeof payload === 'string') {
+          try { return finish(JSON.parse(payload)); } catch { return finish({ metas: [] }); }
+        }
+        finish(payload);
+        return this;
+      },
+      end() { finish({ metas: [] }); return this; }
+    };
+    try {
+      const maybe = await runtime.sendCatalog(req, res);
+      if (!settled && maybe && Array.isArray(maybe.metas)) finish(maybe);
+      if (!settled) setTimeout(() => finish({ metas: [] }), 100);
+    } catch {
+      finish({ metas: [] });
+    }
+  });
+}
+
 async function nativeOriginals(runtime, req) {
   const type = req.params.type;
-  const key = `native-v2:${type}`;
+  const key = `native-v3:${type}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL) return hit.value;
 
@@ -146,7 +180,7 @@ function encodeConcertId(title) {
 
 async function supplementalConcerts(runtime, req) {
   const cfg = runtime.unifiedConfig ? runtime.unifiedConfig(req) : {};
-  const key = `concert-extra-v2:${cfg?.fastshare?.username || ''}|${cfg?.webshare?.username || ''}`;
+  const key = `concert-extra-v3:${cfg?.fastshare?.username || ''}|${cfg?.webshare?.username || ''}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL) return hit.value;
 
@@ -208,23 +242,24 @@ async function supplementalConcerts(runtime, req) {
 
 async function buildFinal(runtime, req) {
   const id = req.params.id;
-  let base = { metas: [] };
-  if (typeof runtime.buildMergedCatalog === 'function' && TARGET_IDS.has(id)) {
-    base = await runtime.buildMergedCatalog(req);
-  }
 
-  if (DUB_IDS.has(id)) {
-    const natives = await nativeOriginals(runtime, req);
-    const foreign = Array.isArray(base.metas) ? base.metas : [];
-    return { metas: sortNewest(dedupe([...foreign, ...natives], 100)).slice(0, 40) };
-  }
+  if (TARGET_IDS.has(id)) {
+    const base = await capturePreviousCatalog(runtime, req);
+    const baseMetas = Array.isArray(base?.metas) ? base.metas : [];
 
-  if (LATEST_IDS.has(id)) {
-    return { metas: sortRecentAdded(dedupe(base.metas || [], 100)).slice(0, 40) };
-  }
+    if (DUB_IDS.has(id)) {
+      const natives = await nativeOriginals(runtime, req);
+      const merged = dedupe([...baseMetas, ...natives], 120);
+      return { metas: sortNewest(merged).slice(0, 40), _debug: { base: baseMetas.length, natives: natives.length } };
+    }
 
-  if (id === 'unified-4k-czsk') {
-    return { metas: sortNewest(dedupe(base.metas || [], 100)).slice(0, 40) };
+    if (LATEST_IDS.has(id)) {
+      return { metas: sortRecentAdded(dedupe(baseMetas, 120)).slice(0, 40), _debug: { base: baseMetas.length } };
+    }
+
+    if (id === 'unified-4k-czsk') {
+      return { metas: sortNewest(dedupe(baseMetas, 120)).slice(0, 40), _debug: { base: baseMetas.length } };
+    }
   }
 
   if (CONCERT_IDS.has(id)) {
@@ -251,13 +286,10 @@ async function buildFinal(runtime, req) {
       } catch { return null; }
     });
     let metas = dedupe([...(poolMetas.filter(Boolean)), ...extra], 160);
-    if (id === 'unified-concerts-new') {
-      metas = sortNewest(metas);
-    } else {
-      metas = metas.sort((a, b) => normalize(a?.name || '').localeCompare(normalize(b?.name || '')) || yearOf(b) - yearOf(a));
-    }
+    if (id === 'unified-concerts-new') metas = sortNewest(metas);
+    else metas = metas.sort((a, b) => normalize(a?.name || '').localeCompare(normalize(b?.name || '')) || yearOf(b) - yearOf(a));
     const skip = skipOf(req.params.extra);
-    return { metas: metas.slice(skip, skip + 40) };
+    return { metas: metas.slice(skip, skip + 40), _debug: { pool: pool.length, extra: extra.length } };
   }
 
   return null;
@@ -277,9 +309,9 @@ function install(runtime) {
     if (!TARGET_IDS.has(id) && !CONCERT_IDS.has(id)) return runtime.sendCatalog(req, res);
     try {
       const result = await buildFinal(runtime, req);
-      res.set('Cache-Control', 'private, max-age=90');
-      console.log('[catalog-finalizer-v2]', JSON.stringify({ id, type: req.params.type, count: result?.metas?.length || 0 }));
-      return res.json(result || { metas: [] });
+      res.set('Cache-Control', 'no-store, max-age=0');
+      console.log('[catalog-finalizer-v3]', JSON.stringify({ id, type: req.params.type, count: result?.metas?.length || 0, ...(result?._debug || {}) }));
+      return res.json({ metas: result?.metas || [] });
     } catch (error) {
       console.error('[catalog-finalizer-error]', String(error?.message || error));
       return runtime.sendCatalog(req, res);
