@@ -84,18 +84,16 @@ function seriesActivityKey(meta) {
     if (key && key <= today && key > best) best = key;
   }
   if (best) return best;
-  const filename = String(meta?.behaviorHints?.filename || '');
-  const years = [...filename.matchAll(/\b(19\d{2}|20\d{2})\b/g)].map(m => Number(m[1]));
-  if (years.length) {
-    const currentYear = Number(today.slice(0, 4));
-    return `${Math.min(Math.max(...years), currentYear)}-12-31`;
-  }
   return releaseSortKey(meta);
 }
 
 function uploadRank(meta) {
   const ts = Number(meta?._uploadedAt || 0);
   return Number.isFinite(ts) && ts > 0 ? ts : 0;
+}
+
+function isWebshareRecent(meta) {
+  return String(meta?._providerSource || '').toLowerCase() === 'webshare';
 }
 
 function sortNewest(metas) {
@@ -110,31 +108,25 @@ function sortNewest(metas) {
   });
 }
 
-function sortSeriesNewest(metas) {
-  return metas.slice().sort((a, b) => {
-    const activityCmp = seriesActivityKey(b).localeCompare(seriesActivityKey(a));
-    if (activityCmp) return activityCmp;
-    const uploadedCmp = uploadRank(b) - uploadRank(a);
-    if (uploadedCmp) return uploadedCmp;
-    const recentCmp = Number(a?._providerRecentRank ?? 999999) - Number(b?._providerRecentRank ?? 999999);
-    if (recentCmp) return recentCmp;
-    const releaseCmp = releaseSortKey(b).localeCompare(releaseSortKey(a));
-    if (releaseCmp) return releaseCmp;
-    return normalize(a?.name || '').localeCompare(normalize(b?.name || ''));
-  });
-}
-
 function sortRecentAdded(metas) {
   return metas.slice().sort((a, b) => {
-    const uploadedCmp = uploadRank(b) - uploadRank(a);
-    if (uploadedCmp) return uploadedCmp;
+    const au = uploadRank(a), bu = uploadRank(b);
+    if (au || bu) {
+      if (au !== bu) return bu - au;
+    }
+
+    const aWebRecent = isWebshareRecent(a);
+    const bWebRecent = isWebshareRecent(b);
     const ar = Number(a?._providerRecentRank ?? 999999);
     const br = Number(b?._providerRecentRank ?? 999999);
-    if (ar !== br) return ar - br;
-    const dateCmp = (a?.type === 'series' || b?.type === 'series')
-      ? seriesActivityKey(b).localeCompare(seriesActivityKey(a))
-      : releaseSortKey(b).localeCompare(releaseSortKey(a));
+    if (aWebRecent && bWebRecent && ar !== br) return ar - br;
+
+    const aDate = String(a?.type || '').toLowerCase() === 'series' ? seriesActivityKey(a) : releaseSortKey(a);
+    const bDate = String(b?.type || '').toLowerCase() === 'series' ? seriesActivityKey(b) : releaseSortKey(b);
+    const dateCmp = bDate.localeCompare(aDate);
     if (dateCmp) return dateCmp;
+
+    if (ar !== br) return ar - br;
     return normalize(a?.name || '').localeCompare(normalize(b?.name || ''));
   });
 }
@@ -170,6 +162,7 @@ function orderSummary(id, metas) {
     ...(String(m?.type || '') === 'series' || id.includes('series') ? { activity: seriesActivityKey(m) } : {}),
     uploadedAt: uploadRank(m) ? new Date(uploadRank(m)).toISOString().slice(0, 10) : '',
     recent: Number.isFinite(Number(m?._providerRecentRank)) ? Number(m._providerRecentRank) : null,
+    source: m?._providerSource || '',
     native: m?._nativeLocale || ''
   }));
 }
@@ -210,7 +203,7 @@ async function capturePreviousCatalog(runtime, req) {
 
 async function nativeOriginals(runtime, req) {
   const type = req.params.type;
-  const key = `native-v5:${type}`;
+  const key = `native-v6:${type}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL) return hit.value;
 
@@ -227,7 +220,7 @@ async function nativeOriginals(runtime, req) {
         : { streams: [] };
       if (!Array.isArray(response?.streams) || response.streams.length === 0) return null;
       const raw = meta?.raw || {};
-      const item = {
+      return {
         ...raw,
         id: raw.id || meta.imdbId || base.id,
         type,
@@ -244,8 +237,6 @@ async function nativeOriginals(runtime, req) {
           ...(type === 'movie' ? { defaultVideoId: raw.id || meta.imdbId || base.id } : {})
         }
       };
-      if (type === 'series') item._seriesActivityDate = seriesActivityKey(item);
-      return item;
     } catch { return null; }
   });
 
@@ -273,7 +264,7 @@ function encodeConcertId(title) {
 
 async function supplementalConcerts(runtime, req) {
   const cfg = runtime.unifiedConfig ? runtime.unifiedConfig(req) : {};
-  const key = `concert-extra-v5:${cfg?.fastshare?.username || ''}|${cfg?.webshare?.username || ''}`;
+  const key = `concert-extra-v6:${cfg?.fastshare?.username || ''}|${cfg?.webshare?.username || ''}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL) return hit.value;
 
@@ -344,7 +335,7 @@ async function buildFinal(runtime, req) {
       const natives = await nativeOriginals(runtime, req);
       const foreign = baseMetas.filter(strongDubMeta);
       const merged = dedupe([...foreign, ...natives], 120);
-      const sorted = id === 'unified-czsk-series' ? sortSeriesNewest(merged) : sortNewest(merged);
+      const sorted = sortNewest(merged);
       return { metas: sorted.slice(0, 40), _debug: { base: baseMetas.length, strongDub: foreign.length, natives: natives.length } };
     }
 
@@ -406,8 +397,8 @@ function install(runtime) {
     try {
       const result = await buildFinal(runtime, req);
       res.set('Cache-Control', 'no-store, max-age=0');
-      console.log('[catalog-finalizer-v5]', JSON.stringify({ id, type: req.params.type, count: result?.metas?.length || 0, ...(result?._debug || {}) }));
-      if (TARGET_IDS.has(id)) console.log('[catalog-order-v5]', JSON.stringify({ id, top: orderSummary(id, result?.metas || []) }));
+      console.log('[catalog-finalizer-v6]', JSON.stringify({ id, type: req.params.type, count: result?.metas?.length || 0, ...(result?._debug || {}) }));
+      if (TARGET_IDS.has(id)) console.log('[catalog-order-v6]', JSON.stringify({ id, top: orderSummary(id, result?.metas || []) }));
       return res.json({ metas: result?.metas || [] });
     } catch (error) {
       console.error('[catalog-finalizer-error]', String(error?.message || error));
