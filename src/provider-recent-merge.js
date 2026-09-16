@@ -8,7 +8,10 @@ const TARGET_IDS = new Set([
   'unified-czsk-series',
   'unified-latest-movies',
   'unified-latest-series',
-  'unified-4k-czsk'
+  'unified-4k-czsk',
+  'unified-search-movies',
+  'unified-search-series',
+  'unified-search-concerts'
 ]);
 
 function skipOf(extra) {
@@ -47,10 +50,12 @@ async function buildMerged(runtime, req) {
   }
 
   let fallback = { metas: [] };
-  try {
-    fallback = await buildCatalog({ type, id, skip, config, configKey, pool: true });
-  } catch (error) {
-    fallback = { metas: [], error: String(error?.message || error) };
+  if (!id.startsWith('unified-search-')) {
+    try {
+      fallback = await buildCatalog({ type, id, skip, config, configKey, pool: true });
+    } catch (error) {
+      fallback = { metas: [], error: String(error?.message || error) };
+    }
   }
 
   const recentMetas = Array.isArray(recent?.metas) ? recent.metas : [];

@@ -5,16 +5,9 @@ const { VERSION } = require('./config');
 require('./catalog-profile');
 
 const VISIBLE_CATALOGS = new Set([
-  'unified-czsk-movies',
-  'unified-czsk-series',
-  'unified-latest-movies',
-  'unified-latest-series',
-  'unified-concerts',
-  'unified-concerts-new',
-  'unified-concerts-4k',
-  'unified-concerts-rock',
-  'unified-concerts-pop',
-  'unified-4k-czsk'
+  'unified-search-movies',
+  'unified-search-series',
+  'unified-search-concerts'
 ]);
 
 function installManifestCompat(runtime) {
@@ -42,7 +35,10 @@ function installManifestCompat(runtime) {
           id: item.id,
           type: item.type,
           name: item.name,
-          extra: [{ name: 'skip', isRequired: false }]
+          extra: [
+            { name: 'search', isRequired: true },
+            { name: 'skip', isRequired: false }
+          ]
         })),
       idPrefixes: ['tt', 'concert'],
       behaviorHints: {

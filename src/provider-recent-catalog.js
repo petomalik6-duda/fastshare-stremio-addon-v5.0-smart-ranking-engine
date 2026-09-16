@@ -14,8 +14,12 @@ const TARGET_IDS = new Set([
   'unified-czsk-series',
   'unified-latest-movies',
   'unified-latest-series',
-  'unified-4k-czsk'
+  'unified-4k-czsk',
+  'unified-search-movies',
+  'unified-search-series',
+  'unified-search-concerts'
 ]);
+const SEARCH_IDS = new Set(['unified-search-movies', 'unified-search-series', 'unified-search-concerts']);
 const CACHE_TTL = Number(process.env.PROVIDER_RECENT_CACHE_TTL_MS || 3 * 60 * 1000);
 const cache = new Map();
 const { validTimestamp } = require('./catalog-order');
@@ -104,7 +108,16 @@ async function matchTmdb(file, type) {
   } catch { return null; }
 }
 
-function searchTerms(id, type) {
+function searchValue(extra) {
+  if (!extra) return '';
+  try {
+    const params = new URLSearchParams(decodeURIComponent(extra));
+    return String(params.get('search') || params.get('query') || '').trim();
+  } catch { return ''; }
+}
+
+function searchTerms(id, type, query = '') {
+  if (SEARCH_IDS.has(id)) return query ? [query] : [];
   const nowYear = new Date().getFullYear();
   const prev = nowYear - 1;
   if (id === 'unified-4k-czsk') return ['2160p', '4K', 'UHD', '2160p CZ', '2160p SK', '4K CZ', '4K SK', 'UHD CZ', 'UHD SK'];
@@ -216,7 +229,9 @@ async function providerRecent(runtime, req) {
   const type = req.params.type;
   const cfg = runtime.unifiedConfig ? runtime.unifiedConfig(req) : {};
   const userKey = `${cfg?.webshare?.username || ''}|${cfg?.fastshare?.username || ''}`;
-  const cacheKey = `${userKey}:${type}:${id}:v4`;
+  const query = searchValue(req.params.extra);
+  if (SEARCH_IDS.has(id) && !query) return { metas: [], matched: 0, source: 'search-missing-query' };
+  const cacheKey = `${userKey}:${type}:${id}:${query}:v5`;
   const hit = cache.get(cacheKey);
   if (hit && Date.now() - hit.at < CACHE_TTL) return hit.value;
 
@@ -224,7 +239,7 @@ async function providerRecent(runtime, req) {
     cfg?.webshare?.username && cfg?.webshare?.password ? webshareLogin(cfg.webshare) : Promise.resolve({ ok: false, error: 'missing credentials' }),
     cfg?.fastshare?.username && cfg?.fastshare?.password ? fastshareLogin(cfg.fastshare) : Promise.resolve({ ok: false, error: 'missing credentials' })
   ]);
-  const terms = searchTerms(id, type);
+  const terms = searchTerms(id, type, query);
   const [webResponses, fastResponses] = await Promise.all([
     wa.ok ? mapWithConcurrency(terms, 4, term => searchWebshareRecent(term, wa.token, { limit: 160 })) : Promise.resolve([]),
     fa.ok ? mapWithConcurrency(terms, 4, term => searchFastshare(term, fa.hash)) : Promise.resolve([])
