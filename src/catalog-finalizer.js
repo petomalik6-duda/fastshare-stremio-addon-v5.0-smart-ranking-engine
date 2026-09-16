@@ -1,7 +1,9 @@
 'use strict';
 
+const { availableEpisodeDate } = require('./catalog-availability-date');
+
 const crypto = require('node:crypto');
-const { sortRelease, releaseKey: effectiveReleaseKey, finalizePage } = require('./catalog-order');
+const { sortRelease, releaseKey: effectiveReleaseKey, finalizePage, sortBasis } = require('./catalog-order');
 const { tmdbLocalCandidates, hasCzSkAudio } = require('./catalogs');
 const { getMeta } = require('./metadata');
 const { mapWithConcurrency, normalize } = require('./utils');
@@ -127,6 +129,8 @@ function orderSummary(id, metas) {
     p: index + 1,
     name: String(m?.name || '').slice(0, 60),
     release: releaseKey(m),
+    sortBasis: id === 'unified-czsk-movies' || id === 'unified-4k-czsk' ? 'title-release' : sortBasis(m),
+    availableEpisode: m?._availableEpisodeDate || '',
     effectiveRelease: releaseSortKey(m),
     ...(String(m?.type || '') === 'series' || id.includes('series') ? { activity: seriesActivityKey(m) } : {}),
     uploadedAt: uploadRank(m) ? new Date(uploadRank(m)).toISOString().slice(0, 10) : '',
@@ -200,6 +204,7 @@ async function nativeOriginals(runtime, req) {
         releaseInfo: raw.releaseInfo || base.releaseInfo,
         year: raw.year || base.year,
         _releaseDate: base._releaseDate,
+        _availableEpisodeDate: type === 'series' ? response.streams.map(stream => availableEpisodeDate(meta, stream?.behaviorHints?.filename)).sort().at(-1) : undefined,
         _nativeLocale: base._nativeLocale,
         behaviorHints: {
           ...(raw.behaviorHints || {}),
@@ -310,7 +315,7 @@ async function buildFinal(runtime, req) {
       return finalizePage(eligible, { mode, skip: 0, limit: Infinity });
     });
     const skip = skipOf(req.params.extra);
-    return { metas: snapshot.slice(skip, skip + 100), _debug: { snapshotCount: snapshot.length, skip } };
+    return { metas: snapshot.slice(skip, skip + 100), _debug: { snapshotCount: snapshot.length, skip, requestedMatched: snapshot.filter(m => m._requestedCatalog).map(m => m.id) } };
   }
 
   if (CONCERT_IDS.has(id)) {

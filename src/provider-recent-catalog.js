@@ -1,11 +1,13 @@
 'use strict';
 
+const { availableEpisodeDate } = require('./catalog-availability-date');
+
 const { login: webshareLogin, searchWebshareRecent } = require('./webshare');
 const { login: fastshareLogin, searchFastshare } = require('./fastshare');
 const { TMDB_API_KEY, TMDB_READ_ACCESS_TOKEN, VERSION } = require('./config');
 const { fetchJson, mapWithConcurrency, normalize } = require('./utils');
 const { getMeta } = require('./metadata');
-const { hasCzSkAudio, qualityMatches } = require('./catalogs');
+const { hasCzSkAudio, qualityMatches, preferredLocalizedTitle } = require('./catalogs');
 
 const TARGET_IDS = new Set([
   'unified-czsk-movies',
@@ -187,11 +189,12 @@ function toCatalogItem(match, type, file, recentRank) {
     ...raw,
     id: raw.id || match.imdbId,
     type,
-    name: raw.name || raw.title || match.meta?.title || cleanTitle(file.name),
+    name: preferredLocalizedTitle(match.meta, raw.name || raw.title || cleanTitle(file.name)),
     poster: raw.poster || (match.row.poster_path ? `https://image.tmdb.org/t/p/w500${match.row.poster_path}` : undefined),
     background: raw.background || (match.row.backdrop_path ? `https://image.tmdb.org/t/p/original${match.row.backdrop_path}` : undefined),
     releaseInfo: raw.releaseInfo || releaseDate.slice(0, 4),
     _releaseDate: releaseDate,
+    _availableEpisodeDate: type === 'series' ? availableEpisodeDate(match.meta, file.name) : undefined,
     _providerRecentRank: recentRank,
     _providerOrderKind: 'discovery',
     _providerFeedId: file._providerFeedId,
@@ -243,9 +246,10 @@ async function providerRecent(runtime, req) {
     webshareFiles: webFiles.length,
     fastshareFiles: fastFiles.length,
     auth: { webshare: Boolean(wa.ok), fastshare: Boolean(fa.ok) },
+    webshareAuthStatus: wa.ok ? 'ok' : (!cfg?.webshare?.username || !cfg?.webshare?.password) ? 'missing-credentials' : 'login-failed',
     source: wa.ok && fa.ok ? 'webshare-recent+fastshare' : wa.ok ? 'webshare-recent' : fa.ok ? 'fastshare-fallback' : 'none'
   };
-  console.log('[provider-native-scan]', JSON.stringify({ id, type, ...value.auth, source: value.source, webshareFiles: value.webshareFiles, fastshareFiles: value.fastshareFiles, eligibleFiles: files.length, matched: metas.length }));
+  console.log('[provider-native-scan]', JSON.stringify({ id, type, ...value.auth, source: value.source, webshareFiles: value.webshareFiles, fastshareFiles: value.fastshareFiles, eligibleFiles: files.length, matched: metas.length, webshareAuthStatus: value.webshareAuthStatus }));
   cache.set(cacheKey, { at: Date.now(), value });
   return value;
 }

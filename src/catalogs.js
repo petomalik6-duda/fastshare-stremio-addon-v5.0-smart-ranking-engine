@@ -1,5 +1,8 @@
 'use strict';
 
+const { availableEpisodeDate } = require('./catalog-availability-date');
+const { requestedCandidates } = require('./catalog-requested-titles');
+
 const {
   VERSION,
   SEARCH_CONCURRENCY,
@@ -303,7 +306,9 @@ function metaToCatalogItem(base, match, type, def, meta) {
 
   const item = {
     id: base.id,
+    _requestedCatalog: base._requestedCatalog,
     _releaseDate: base._releaseDate,
+    _availableEpisodeDate: type === 'series' ? availableEpisodeDate(meta, match?.name) : undefined,
     _audioEvidence: match?.audio,
     _providerSource: match?.provider,
     type,
@@ -338,6 +343,7 @@ async function checkCandidateBatch(batch, type, def, auth) {
     try {
       const meta = await getMeta(type, base.id);
       const match = await availabilityForMeta(meta, type, def, auth, base);
+      if (base._requestedCatalog) console.log('[catalog-requested-title]', JSON.stringify({ id: base.id, catalog: def.id, matched: Boolean(match) }));
       return match ? metaToCatalogItem(base, match, type, def, meta) : null;
     } catch {
       return null;
@@ -369,7 +375,11 @@ async function buildCatalog({ type, id, skip = 0, config, configKey = '', pool =
   const auth = await authProviders(config);
   if (!auth.fastshare.ok && !auth.webshare.ok) return { metas: [], auth: { fastshare: false, webshare: false } };
 
-  const candidates = await catalogCandidates(type, def, normalizedSkip);
+  const [discovered, requested] = await Promise.all([
+    catalogCandidates(type, def, normalizedSkip),
+    pool && def.source === 'latest' ? requestedCandidates(type, getMeta) : Promise.resolve([])
+  ]);
+  const candidates = [...new Map([...requested, ...discovered].map(item => [item.id, item])).values()];
   const metas = await fillCatalog(candidates, type, def, auth, pool ? Infinity : CATALOG_PAGE_SIZE);
   const value = {
     metas,

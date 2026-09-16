@@ -4,6 +4,44 @@ const assert = require('node:assert/strict');
 const { compareAdded, sortAdded, sortRelease, finalizePage, SnapshotCache, validTimestamp } = require('../src/catalog-order');
 const now = Date.UTC(2026, 8, 16, 12);
 const ids = rows => rows.map(x => x.id);
+const { availableEpisodeDate } = require('../src/catalog-availability-date');
+
+test('production regression: undated Mentalist and Leftovers search hits must not precede new dated titles', () => {
+  const rows = [
+    { id: 'mentalist', type: 'series', _releaseDate: '2008-09-23', _providerSource: 'fastshare', _providerFeedRank: 0, _providerRecentRank: 10 },
+    { id: 'leftovers', type: 'series', _releaseDate: '2014-06-29', _providerSource: 'fastshare', _providerFeedRank: 1, _providerRecentRank: 3 },
+    { id: 'mesto-krve', type: 'series', _releaseDate: '2026-09-16', _providerSource: 'fastshare' },
+    { id: 'native', type: 'series', _releaseDate: '2026-09-10', _nativeLocale: 'cz' }
+  ];
+  assert.deepEqual(ids(finalizePage(rows, { now })), ['mesto-krve', 'native', 'leftovers', 'mentalist']);
+  assert.deepEqual(ids(finalizePage(rows.reverse(), { now })), ['mesto-krve', 'native', 'leftovers', 'mentalist']);
+});
+
+test('episode fallback uses only episodes contained in the available file', () => {
+  const meta = { raw: { videos: [
+    { season: 1, episode: 1, released: '2008-09-23' },
+    { season: 7, episode: 1, released: '2014-11-30' },
+    { season: 8, episode: 1, released: '2026-09-15' },
+    { season: 8, episode: 2, released: '2027-01-01' }
+  ] } };
+  assert.equal(availableEpisodeDate(meta, 'Show_S01E01_CZ.mkv', now), '2008-09-23');
+  assert.equal(availableEpisodeDate(meta, 'Show.S08E01E02.CZ.mkv', now), '2026-09-15');
+  assert.equal(availableEpisodeDate(meta, 'Show S07 complete CZ.mkv', now), '2014-11-30');
+  assert.equal(availableEpisodeDate(meta, 'Show x265 CZ.mkv', now), '');
+  assert.equal(availableEpisodeDate(meta, 'Show S09E01 CZ.mkv', now), '');
+  const old = { id: 'old', type: 'series', _releaseDate: '2008-01-01', _availableEpisodeDate: availableEpisodeDate(meta, 'Show S08E01 CZ.mkv', now) };
+  const recent = { id: 'recent', type: 'series', _releaseDate: '2026-09-10' };
+  assert.deepEqual(ids(sortAdded([recent, old], now)), ['old', 'recent']);
+});
+
+test('discovery provenance does not outrank movie date; known uploads still lead', () => {
+  const rows = [
+    { id: 'old-search', type: 'movie', _releaseDate: '2025-06-23', _providerSource: 'fastshare', _providerFeedRank: 0 },
+    { id: 'new-fallback', type: 'movie', _releaseDate: '2026-09-10' },
+    { id: 'known-upload', type: 'movie', _releaseDate: '2000-01-01', _uploadedAt: now - 1000 }
+  ];
+  assert.deepEqual(ids(sortAdded(rows, now)), ['known-upload', 'new-fallback', 'old-search']);
+});
 
 test('mixed-provider ordering is transitive and independent of input permutations', () => {
   const a = { id: 'a', _providerSource: 'webshare', _providerRecentRank: 1, _releaseDate: '2000-01-01' };
@@ -13,7 +51,7 @@ test('mixed-provider ordering is transitive and independent of input permutation
   for (const x of rows) for (const y of rows) for (const z of rows) {
     if (compareAdded(x, y, now) <= 0 && compareAdded(y, z, now) <= 0) assert.ok(compareAdded(x, z, now) <= 0);
   }
-  for (const perm of [[a,b,c],[a,c,b],[b,a,c],[b,c,a],[c,a,b],[c,b,a]]) assert.deepEqual(ids(sortAdded(perm, now)), ['a','b','c']);
+  for (const perm of [[a,b,c],[a,c,b],[b,a,c],[b,c,a],[c,a,b],[c,b,a]]) assert.deepEqual(ids(sortAdded(perm, now)), ['b','c','a']);
 });
 
 test('a newly available episode updates an old series; premiere sorting remains separate', () => {

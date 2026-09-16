@@ -25,14 +25,30 @@ function releaseKey(meta, now) {
 }
 
 function rank(value) { return value !== null && value !== undefined && Number.isFinite(Number(value)) ? Number(value) : Number.MAX_SAFE_INTEGER; }
+function fallbackDate(meta, now) {
+  if (meta.type === 'series' && meta._availableEpisodeDate) {
+    const episode = releaseKey({ _releaseDate: meta._availableEpisodeDate }, now);
+    if (episode) return episode;
+  }
+  return releaseKey(meta, now);
+}
+function sortBasis(meta, now = Date.now()) {
+  if (validTimestamp(meta._uploadedAt, now)) return 'upload';
+  if (meta._providerOrderKind === 'recent-feed') return 'provider-recent-feed';
+  if (meta.type === 'series' && releaseKey({ _releaseDate: meta._availableEpisodeDate }, now)) return 'available-episode-release-fallback';
+  return releaseKey(meta, now) ? 'title-release-fallback' : 'unknown-date';
+}
 function addedKey(meta, now) {
   const upload = validTimestamp(meta._uploadedAt, now);
-  if (upload) return [0, -upload, '', 0, 0, String(meta.id)];
+  if (upload) return [0, -upload, '', 0, 0, 0, String(meta.id)];
   // Search ranks from different queries are not a shared chronological feed.
   const feed = meta._providerOrderKind === 'recent-feed';
   const source = meta._providerSource === 'webshare' ? 0 : meta._providerSource === 'fastshare' ? 1 : 2;
-  const hasRank = rank(meta._providerFeedRank) !== Number.MAX_SAFE_INTEGER || rank(meta._providerRecentRank) !== Number.MAX_SAFE_INTEGER;
-  return [feed ? 1 : hasRank ? 2 : 3, source, String(meta._providerFeedId || ''), rank(meta._providerFeedRank), rank(meta._providerRecentRank), String(meta.id)];
+  if (feed) return [1, source, String(meta._providerFeedId || ''), rank(meta._providerFeedRank), rank(meta._providerRecentRank), 0, String(meta.id)];
+  // Discovery results have no chronology. Rank and provider must not put old
+  // search hits ahead of dated candidates from the metadata fallback.
+  const date = fallbackDate(meta, now);
+  return [2, date ? -Number(date.replaceAll('-', '')) : 0, '', source, rank(meta._providerFeedRank), rank(meta._providerRecentRank), String(meta.id)];
 }
 function compareKeys(a, b) {
   for (let i = 0; i < a.length; i++) {
@@ -72,4 +88,4 @@ class SnapshotCache {
     return entry.promise;
   }
 }
-module.exports = { validTimestamp, releaseKey, compareAdded, sortAdded, sortRelease, finalizePage, SnapshotCache };
+module.exports = { validTimestamp, releaseKey, compareAdded, sortAdded, sortRelease, finalizePage, SnapshotCache, sortBasis };
