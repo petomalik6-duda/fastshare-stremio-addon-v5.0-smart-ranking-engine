@@ -26,9 +26,9 @@ function installManifestCompat(runtime) {
   function manifest(configToken = null) {
     return {
       id: 'community.fastshare.webshare.unified',
-      version: '7.18.5',
+      version: '7.18.6',
       name: 'FastShare + Webshare',
-      description: 'Unified FastShare/Webshare addon with merged provider-recent plus TMDB fallback catalogs, catalog diagnostics, direct concert streaming, ranking and caching.',
+      description: 'Unified FastShare/Webshare addon with release-date sorted latest catalogs, Czech/Slovak native originals, expanded concert discovery, provider-recent plus TMDB fallback, ranking and caching.',
       logo: 'https://www.stremio.com/website/stremio-logo-small.png',
       resources: ['catalog', 'meta', 'stream'],
       types: ['movie', 'series'],
