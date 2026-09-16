@@ -22,6 +22,8 @@ const TARGET_IDS = new Set([
 const SEARCH_IDS = new Set(['unified-search-movies', 'unified-search-series', 'unified-search-concerts']);
 const CACHE_TTL = Number(process.env.PROVIDER_RECENT_CACHE_TTL_MS || 3 * 60 * 1000);
 const cache = new Map();
+const tmdbMatchCache = new Map();
+const TMDB_MATCH_CACHE_TTL = 6 * 60 * 60 * 1000;
 const { validTimestamp } = require('./catalog-order');
 
 function tmdbEnabled() { return Boolean(TMDB_API_KEY || TMDB_READ_ACCESS_TOKEN); }
@@ -79,6 +81,9 @@ async function matchTmdb(file, type) {
   const query = cleanTitle(file.name);
   if (query.length < 3) return null;
   const year = yearOf(file.name);
+  const matchKey = `${type}:${normalize(query)}:${year}`;
+  const cached = tmdbMatchCache.get(matchKey);
+  if (cached && Date.now() - cached.at < TMDB_MATCH_CACHE_TTL) return cached.value;
   const isSeries = type === 'series';
   const path = isSeries ? '/search/tv' : '/search/movie';
   const [withYear, withoutYear] = await Promise.all([
@@ -102,10 +107,34 @@ async function matchTmdb(file, type) {
     const extPath = isSeries ? `/tv/${best.row.id}/external_ids` : `/movie/${best.row.id}/external_ids`;
     const ext = await fetchJson(tmdbUrl(extPath), { headers: tmdbHeaders() });
     const imdbId = String(ext?.imdb_id || '');
-    if (!/^tt\d+$/.test(imdbId)) return null;
+    if (!/^tt\d+$/.test(imdbId)) {
+      tmdbMatchCache.set(matchKey, { at: Date.now(), value: null });
+      return null;
+    }
     const meta = await getMeta(type, imdbId);
-    return { imdbId, meta, row: best.row, score: best.score };
-  } catch { return null; }
+    const value = { imdbId, meta, row: best.row, score: best.score };
+    tmdbMatchCache.set(matchKey, { at: Date.now(), value });
+    return value;
+  } catch {
+    tmdbMatchCache.set(matchKey, { at: Date.now(), value: null });
+    return null;
+  }
+}
+
+function collapseSearchFiles(files, limit = 220) {
+  const groups = new Map();
+  for (const file of files || []) {
+    const title = normalize(cleanTitle(file?.name || ''));
+    if (!title) continue;
+    const year = yearOf(file?.name || '');
+    const key = `${title}|${year}|${isSeriesFile(file?.name) ? 'series' : 'movie'}`;
+    const list = groups.get(key) || [];
+    // Keep the two best provider entries per title: this preserves a distinct
+    // 4K/quality variant while eliminating repeated TMDB lookups.
+    if (list.length < 2) list.push(file);
+    groups.set(key, list);
+  }
+  return [...groups.values()].flat().slice(0, limit);
 }
 
 function searchValue(extra) {
@@ -249,7 +278,8 @@ async function providerRecent(runtime, req) {
   const fastFiles = collectResponses(fastResponses, 'fastshare');
   const files = mergeProviderFiles(webFiles, fastFiles, id, type);
 
-  const matches = await mapWithConcurrency(files.slice(0, 220), 7, file => matchTmdb(file, type).then(match => match ? { file, match } : null));
+  const candidateFiles = SEARCH_IDS.has(id) ? collapseSearchFiles(files, 220) : files.slice(0, 220);
+  const matches = await mapWithConcurrency(candidateFiles, 7, file => matchTmdb(file, type).then(match => match ? { file, match } : null));
   const metas = [];
   for (const item of matches) {
     if (!item) continue;
@@ -303,3 +333,5 @@ function install(runtime) {
 }
 
 module.exports = install;
+module.exports.collapseSearchFiles = collapseSearchFiles;
+module.exports.searchValue = searchValue;
