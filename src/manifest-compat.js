@@ -1,11 +1,16 @@
 'use strict';
 
 const { CATALOGS, preferredLocalizedTitle } = require('./catalogs');
+require('./catalog-profile');
 
-const HIDDEN_CONCERT_CATALOGS = new Set([
-  'unified-concerts-4k',
-  'unified-concerts-rock',
-  'unified-concerts-pop'
+const VISIBLE_CATALOGS = new Set([
+  'unified-czsk-movies',
+  'unified-czsk-series',
+  'unified-latest-movies',
+  'unified-latest-series',
+  'unified-concerts',
+  'unified-concerts-new',
+  'unified-4k-czsk'
 ]);
 
 function installManifestCompat(runtime) {
@@ -20,15 +25,15 @@ function installManifestCompat(runtime) {
 
   function manifest(configToken = null) {
     return {
-      id: 'community.fastshare.webshare.unified.v716',
-      version: '7.16.0',
+      id: 'community.fastshare.webshare.unified.v717',
+      version: '7.17.0',
       name: 'FastShare + Webshare',
-      description: 'Unified FastShare/Webshare streams with native Czech/Slovak catalogs and a polished concert catalog with richer TMDB/Wikipedia metadata.',
+      description: 'Unified FastShare/Webshare addon with latest dubbed movies/series, latest additions, concerts and new 4K dubbed movies.',
       logo: 'https://www.stremio.com/website/stremio-logo-small.png',
       resources: ['catalog', 'meta', 'stream'],
       types: ['movie', 'series'],
       catalogs: CATALOGS
-        .filter(item => !HIDDEN_CONCERT_CATALOGS.has(item.id))
+        .filter(item => VISIBLE_CATALOGS.has(item.id))
         .map(item => ({
           id: item.id,
           type: item.type,
