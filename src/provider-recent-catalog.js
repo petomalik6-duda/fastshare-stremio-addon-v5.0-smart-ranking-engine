@@ -143,6 +143,7 @@ function eligibleFile(file, id, type) {
   const series = isSeriesFile(file.name);
   if (type === 'series' && !series) return false;
   if (type === 'movie' && series) return false;
+  if (id === 'unified-search-concerts' && !/\b(concert|koncert|live|tour|festival|unplugged|performance)\b/i.test(String(file?.name || ''))) return false;
   if (id === 'unified-czsk-movies' || id === 'unified-czsk-series' || id === 'unified-4k-czsk') {
     if (!likelyCzSkRelease(file)) return false;
   }
