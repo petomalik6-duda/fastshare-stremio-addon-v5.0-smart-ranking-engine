@@ -1,6 +1,6 @@
 {
   "name": "fastshare-webshare-stremio-addon",
-  "version": "7.1.0",
+  "version": "7.18.16",
   "description": "Unified FastShare + Webshare Stremio/Nuvio addon with CZ/SK availability catalogs, staged localized search, resilient ranking, metadata matching and configurable credentials for both providers.",
   "main": "src/entrypoint.js",
   "scripts": {

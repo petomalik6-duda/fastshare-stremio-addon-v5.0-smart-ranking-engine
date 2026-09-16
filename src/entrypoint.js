@@ -2,7 +2,7 @@
 
 const ranking = require('./ranking');
 const { normalize, levenshtein, similarity } = require('./utils');
-const { PORT } = require('./config');
+const { PORT, VERSION } = require('./config');
 
 const baseRankFiles = ranking.rankFiles;
 
@@ -105,9 +105,9 @@ finalRuntime.app.get('/deploy-info', (req, res) => {
   res.set('Cache-Control', 'no-store');
   res.json({
     ok: true,
-    version: '7.18.16',
+    version: VERSION,
     entrypoint: 'src/entrypoint.js',
-    runtime: 'FastShare+Webshare unified v71814',
+    runtime: `FastShare+Webshare unified v${VERSION.replaceAll('.', '')}`,
     configurator: 'server-side',
     manifestCompat: true,
     strictDubCatalogs: true,
@@ -129,7 +129,7 @@ finalRuntime.app.get('/deploy-info', (req, res) => {
     catalogFinalizer: true,
     catalogFinalizerMode: 'evidence-preserving+total-order+snapshot-pagination',
     catalogCacheControl: 'no-store',
-    dubbedMovieCatalogSort: 'release-date-desc-valid-past-only',
+    dubbedMovieCatalogSort: 'provider-recent-or-release-date-desc-valid-past-only',
     dubbedSeriesCatalogSort: 'upload-or-matched-episode-date-or-title-date',
     latestAddedCatalogSort: 'verified-upload-time; matched-episode-or-title-date-fallback; search-rank-last',
     nativeCzSkOriginalsIncluded: true,
@@ -157,7 +157,7 @@ finalRuntime.app.get('/deploy-info', (req, res) => {
 
 function start() {
   return finalRuntime.app.listen(PORT, () => {
-    console.log(`FastShare + Webshare Stremio addon v7.18.16 on ${PORT}`);
+    console.log(`FastShare + Webshare Stremio addon v${VERSION} on ${PORT}`);
   });
 }
 

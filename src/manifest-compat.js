@@ -1,6 +1,7 @@
 'use strict';
 
 const { CATALOGS, preferredLocalizedTitle } = require('./catalogs');
+const { VERSION } = require('./config');
 require('./catalog-profile');
 
 const VISIBLE_CATALOGS = new Set([
@@ -26,7 +27,7 @@ function installManifestCompat(runtime) {
   function manifest(configToken = null) {
     return {
       id: 'community.fastshare.webshare.unified',
-      version: '7.18.16',
+      version: VERSION,
       name: 'FastShare + Webshare',
       description: 'Unified FastShare/Webshare addon with consistent catalog ordering: movie premieres by valid release date, series and added catalogs by upload time with matched-episode or title-date fallback and snapshot pagination, strict final CZ/SK dubbing verification, and no-store catalog responses.',
       logo: 'https://www.stremio.com/website/stremio-logo-small.png',
