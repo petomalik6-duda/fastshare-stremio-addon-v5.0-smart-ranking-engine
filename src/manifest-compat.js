@@ -26,9 +26,9 @@ function installManifestCompat(runtime) {
   function manifest(configToken = null) {
     return {
       id: 'community.fastshare.webshare.unified',
-      version: '7.18.11',
+      version: '7.18.12',
       name: 'FastShare + Webshare',
-      description: 'Unified FastShare/Webshare addon with audited movie and series ordering, future movie release dates clamped to today, future TV episodes ignored for activity sorting, strict final CZ/SK dubbing verification, dual-provider recent discovery and no-store catalog responses.',
+      description: 'Unified FastShare/Webshare addon with consistent catalog ordering: dubbed movies and series by release date, latest-added catalogs by real upload timestamp when available with release/activity fallback, strict final CZ/SK dubbing verification, and no-store catalog responses.',
       logo: 'https://www.stremio.com/website/stremio-logo-small.png',
       resources: ['catalog', 'meta', 'stream'],
       types: ['movie', 'series'],
