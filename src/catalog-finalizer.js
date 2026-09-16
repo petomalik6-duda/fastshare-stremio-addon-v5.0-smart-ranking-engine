@@ -116,7 +116,12 @@ function uploadRank(meta) {
 function sortNewest(metas) { return sortRelease(metas); }
 
 function strongDubMeta(meta) {
-  if (!recentRelease(meta)) return false;
+  const providerRecent = Number.isFinite(Number(meta?._providerRecentRank)) &&
+    ['fastshare', 'webshare'].includes(String(meta?._providerSource || '').toLowerCase());
+  // A provider recent hit is a current upload even when the film itself is
+  // older. Requested recovery candidates have already passed availability and
+  // dubbing checks in the catalog builder.
+  if (!providerRecent && !meta?._requestedCatalog && !recentRelease(meta)) return false;
   const locale = String(meta?._nativeLocale || '').toLowerCase();
   if (locale === 'cz' || locale === 'sk') {
     const rawDate = String(meta?._releaseDate || meta?.released || meta?.raw?.released || '').slice(0, 10);

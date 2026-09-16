@@ -19,3 +19,11 @@ test('dubbed new-release catalog keeps explicit Czech audio evidence', () => {
 test('dubbed new-release catalog rejects an old foreign film even with Czech audio', () => {
   assert.equal(strongDubMeta({ _releaseDate: '2020-01-15', behaviorHints: { filename: 'Film 2020 CZ dabing.mkv' } }), false);
 });
+
+test('provider recent upload may retain an older film release', () => {
+  assert.equal(strongDubMeta({ _releaseDate: '2020-01-15', _providerSource: 'fastshare', _providerRecentRank: 3, behaviorHints: { filename: 'Film 2020 CZ dabing.mkv' } }), true);
+});
+
+test('requested recovered title keeps provider-verified availability', () => {
+  assert.equal(strongDubMeta({ _releaseDate: '2020-01-15', _requestedCatalog: true, behaviorHints: { filename: 'Film 2020 CZ dabing.mkv' } }), true);
+});
