@@ -105,7 +105,7 @@ finalRuntime.app.get('/deploy-info', (req, res) => {
   res.set('Cache-Control', 'no-store');
   res.json({
     ok: true,
-    version: '7.18.14',
+    version: '7.18.15',
     entrypoint: 'src/entrypoint.js',
     runtime: 'FastShare+Webshare unified v71814',
     configurator: 'server-side',
@@ -157,7 +157,7 @@ finalRuntime.app.get('/deploy-info', (req, res) => {
 
 function start() {
   return finalRuntime.app.listen(PORT, () => {
-    console.log(`FastShare + Webshare Stremio addon v7.18.14 on ${PORT}`);
+    console.log(`FastShare + Webshare Stremio addon v7.18.15 on ${PORT}`);
   });
 }
 
