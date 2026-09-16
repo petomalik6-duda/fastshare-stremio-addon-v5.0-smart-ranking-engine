@@ -50,6 +50,19 @@ function yearOf(meta) {
   return 0;
 }
 
+function recentRelease(meta) {
+  const rawDate = String(
+    meta?._releaseDate || meta?._availableEpisodeDate || meta?.released || meta?.raw?.released || ''
+  ).slice(0, 10);
+  const today = todayKey();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(rawDate)) {
+    const cutoff = new Date(Date.now() - 730 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    return rawDate >= cutoff && rawDate <= today;
+  }
+  const year = yearOf(meta);
+  return year >= new Date().getFullYear() - 1;
+}
+
 function releaseKey(meta) {
   const values = [meta?._releaseDate, meta?.released, meta?.raw?.released];
   for (const value of values) {
@@ -103,6 +116,7 @@ function uploadRank(meta) {
 function sortNewest(metas) { return sortRelease(metas); }
 
 function strongDubMeta(meta) {
+  if (!recentRelease(meta)) return false;
   const locale = String(meta?._nativeLocale || '').toLowerCase();
   if (locale === 'cz' || locale === 'sk') {
     const rawDate = String(meta?._releaseDate || meta?.released || meta?.raw?.released || '').slice(0, 10);
