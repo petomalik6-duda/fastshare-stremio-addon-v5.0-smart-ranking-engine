@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('node:crypto');
 const { buildCatalog } = require('./catalogs');
 
 const TARGET_IDS = new Set([
@@ -16,7 +17,7 @@ function skipOf(extra) {
   catch { return 0; }
 }
 
-function mergeMetas(primary = [], fallback = [], limit = 40) {
+function mergeMetas(primary = [], fallback = [], limit = Infinity) {
   const out = [];
   const seen = new Set();
   for (const item of [...primary, ...fallback]) {
@@ -32,9 +33,9 @@ function mergeMetas(primary = [], fallback = [], limit = 40) {
 async function buildMerged(runtime, req) {
   const type = req.params.type;
   const id = req.params.id;
-  const skip = skipOf(req.params.extra);
+  const skip = 0; // Pagination belongs to the final sorted snapshot.
   const config = runtime.unifiedConfig ? runtime.unifiedConfig(req) : {};
-  const configKey = `${config?.fastshare?.username || ''}|${config?.webshare?.username || ''}`;
+  const configKey = crypto.createHash('sha256').update(JSON.stringify(config)).digest('hex');
 
   let recent = null;
   try {
@@ -47,14 +48,14 @@ async function buildMerged(runtime, req) {
 
   let fallback = { metas: [] };
   try {
-    fallback = await buildCatalog({ type, id, skip, config, configKey });
+    fallback = await buildCatalog({ type, id, skip, config, configKey, pool: true });
   } catch (error) {
     fallback = { metas: [], error: String(error?.message || error) };
   }
 
   const recentMetas = Array.isArray(recent?.metas) ? recent.metas : [];
   const fallbackMetas = Array.isArray(fallback?.metas) ? fallback.metas : [];
-  const metas = mergeMetas(recentMetas, fallbackMetas, 40);
+  const metas = [...recentMetas, ...fallbackMetas];
 
   return {
     metas,

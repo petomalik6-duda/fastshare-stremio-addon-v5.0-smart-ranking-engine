@@ -105,9 +105,9 @@ finalRuntime.app.get('/deploy-info', (req, res) => {
   res.set('Cache-Control', 'no-store');
   res.json({
     ok: true,
-    version: '7.18.12',
+    version: '7.18.13',
     entrypoint: 'src/entrypoint.js',
-    runtime: 'FastShare+Webshare unified v71812',
+    runtime: 'FastShare+Webshare unified v71813',
     configurator: 'server-side',
     manifestCompat: true,
     strictDubCatalogs: true,
@@ -127,11 +127,11 @@ finalRuntime.app.get('/deploy-info', (req, res) => {
     providerNativeRecentSources: 'webshare-recent+fastshare-fallback',
     providerRecentMergedWithFallback: true,
     catalogFinalizer: true,
-    catalogFinalizerMode: 'strict-dub-recheck+aligned-sort-semantics',
+    catalogFinalizerMode: 'evidence-preserving+total-order+snapshot-pagination',
     catalogCacheControl: 'no-store',
-    dubbedMovieCatalogSort: 'release-date-desc-clamped-to-today',
-    dubbedSeriesCatalogSort: 'series-release-date-desc-clamped-to-today',
-    latestAddedCatalogSort: 'real-upload-time; webshare-recent; release/activity fallback; search-rank-last',
+    dubbedMovieCatalogSort: 'release-date-desc-valid-past-only',
+    dubbedSeriesCatalogSort: 'available-episode-upload-or-discovery-order',
+    latestAddedCatalogSort: 'verified-upload-time; explicit-discovery-fallback; stable-snapshot-pagination',
     nativeCzSkOriginalsIncluded: true,
     expandedConcertDiscovery: true,
     concertMainSort: 'alphabetical',
@@ -157,7 +157,7 @@ finalRuntime.app.get('/deploy-info', (req, res) => {
 
 function start() {
   return finalRuntime.app.listen(PORT, () => {
-    console.log(`FastShare + Webshare Stremio addon v7.18.12 on ${PORT}`);
+    console.log(`FastShare + Webshare Stremio addon v7.18.13 on ${PORT}`);
   });
 }
 

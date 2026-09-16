@@ -6,13 +6,13 @@ const PROFILE = [
   {
     id: 'unified-czsk-movies',
     type: 'movie',
-    name: '🆕🇨🇿🇸🇰 Najnovšie dabované filmy',
+    name: '🆕🇨🇿🇸🇰 Filmové novinky s CZ/SK audiom',
     source: 'latest'
   },
   {
     id: 'unified-czsk-series',
     type: 'series',
-    name: '🆕🇨🇿🇸🇰 Najnovšie dabované seriály',
+    name: '🆕🇨🇿🇸🇰 Najnovšie pridané CZ/SK seriály',
     source: 'latest'
   },
   {

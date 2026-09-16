@@ -297,12 +297,15 @@ async function availabilityForMeta(meta, type, def, auth, base = null) {
 }
 
 function metaToCatalogItem(base, match, type, def, meta) {
-  const behaviorHints = { ...(base.behaviorHints || {}) };
+  const behaviorHints = { ...(base.behaviorHints || {}), filename: match?.name || '' };
   if (type === 'movie') behaviorHints.defaultVideoId = base.id;
   else delete behaviorHints.defaultVideoId;
 
   const item = {
     id: base.id,
+    _releaseDate: base._releaseDate,
+    _audioEvidence: match?.audio,
+    _providerSource: match?.provider,
     type,
     name: preferredLocalizedTitle(meta, base.name),
     poster: base.poster,
@@ -342,24 +345,24 @@ async function checkCandidateBatch(batch, type, def, auth) {
   });
 }
 
-async function fillCatalog(candidates, type, def, auth) {
+async function fillCatalog(candidates, type, def, auth, limit = CATALOG_PAGE_SIZE) {
   const metas = [];
   const batchSize = def.quality ? 28 : 22;
-  for (let offset = 0; offset < candidates.length && metas.length < CATALOG_PAGE_SIZE; offset += batchSize) {
+  for (let offset = 0; offset < candidates.length && metas.length < limit; offset += batchSize) {
     const checked = await checkCandidateBatch(candidates.slice(offset, offset + batchSize), type, def, auth);
     for (const item of checked) {
       if (item) metas.push(item);
-      if (metas.length >= CATALOG_PAGE_SIZE) break;
+      if (metas.length >= limit) break;
     }
   }
-  return metas.slice(0, CATALOG_PAGE_SIZE);
+  return metas.slice(0, limit);
 }
 
-async function buildCatalog({ type, id, skip = 0, config, configKey = '' }) {
+async function buildCatalog({ type, id, skip = 0, config, configKey = '', pool = false }) {
   const def = catalogDef(id, type);
   if (!def) return { metas: [] };
   const normalizedSkip = Math.max(0, Number(skip || 0));
-  const cacheKey = `catalog-v13:${configKey}:${type}:${id}:${normalizedSkip}`;
+  const cacheKey = `catalog-v13:${configKey}:${type}:${id}:${normalizedSkip}:${pool ? "pool-v14" : "page"}`;
   const cached = getFreshCache(catalogCache, cacheKey, CATALOG_CACHE_TTL_MS);
   if (cached) return { ...cached, cache: 'hit' };
 
@@ -367,7 +370,7 @@ async function buildCatalog({ type, id, skip = 0, config, configKey = '' }) {
   if (!auth.fastshare.ok && !auth.webshare.ok) return { metas: [], auth: { fastshare: false, webshare: false } };
 
   const candidates = await catalogCandidates(type, def, normalizedSkip);
-  const metas = await fillCatalog(candidates, type, def, auth);
+  const metas = await fillCatalog(candidates, type, def, auth, pool ? Infinity : CATALOG_PAGE_SIZE);
   const value = {
     metas,
     auth: { fastshare: auth.fastshare.ok, webshare: auth.webshare.ok },

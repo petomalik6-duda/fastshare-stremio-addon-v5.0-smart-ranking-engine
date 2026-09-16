@@ -16,6 +16,7 @@ const TARGET_IDS = new Set([
 ]);
 const CACHE_TTL = Number(process.env.PROVIDER_RECENT_CACHE_TTL_MS || 3 * 60 * 1000);
 const cache = new Map();
+const { validTimestamp } = require('./catalog-order');
 
 function tmdbEnabled() { return Boolean(TMDB_API_KEY || TMDB_READ_ACCESS_TOKEN); }
 function tmdbHeaders() {
@@ -30,7 +31,7 @@ function tmdbUrl(path, params = {}) {
 }
 
 function isSeriesFile(name) {
-  return /\bS\d{1,2}(?:E\d{1,3})?\b|\b\d{1,2}x\d{1,3}\b|\bseason\s*\d{1,2}\b|\bseria\s*\d{1,2}\b/i.test(String(name || ''));
+  return /\bS\d{1,2}(?:E\d{1,3})?\b|\b\d{1,2}x\d{1,3}\b|\bseason\s*\d{1,2}\b|\bseria\s*\d{1,2}\b/i.test(String(name || '').replace(/[._]+/g, ' '));
 }
 function yearOf(name) { return String(name || '').match(/\b(19\d{2}|20\d{2})\b/)?.[0] || ''; }
 function cleanTitle(name) {
@@ -136,14 +137,9 @@ function eligibleFile(file, id, type) {
 
 function timestampOf(file) {
   const raw = file?.raw || {};
-  const values = [file?.created, file?.uploaded, raw.created, raw.uploaded, raw.created_at, raw.uploaded_at, raw.upload_date, raw.date, raw.added, raw.added_at, raw.timestamp];
-  for (const value of values) {
-    if (value === undefined || value === null || value === '') continue;
-    if (typeof value === 'number') return value > 1e12 ? value : value * 1000;
-    const numeric = Number(value);
-    if (Number.isFinite(numeric) && numeric > 1000000000) return numeric > 1e12 ? numeric : numeric * 1000;
-    const parsed = Date.parse(String(value));
-    if (Number.isFinite(parsed)) return parsed;
+  for (const value of [file?.created, file?.uploaded, raw.created, raw.uploaded, raw.created_at, raw.uploaded_at, raw.upload_date, raw.added_at]) {
+    const time = validTimestamp(value);
+    if (time) return time;
   }
   return 0;
 }
@@ -153,12 +149,12 @@ function collectResponses(responses, provider, limit = 260) {
   const seen = new Set();
   const maxLen = Math.max(...responses.map(r => (r?.files || []).length), 0);
   for (let i = 0; i < maxLen && files.length < limit; i++) {
-    for (const response of responses) {
+    for (const [feedIndex, response] of responses.entries()) {
       const file = response?.files?.[i];
       const key = `${provider}:${file?.id || file?.ident || file?.name || ''}`;
       if (!file || seen.has(key)) continue;
       seen.add(key);
-      files.push({ ...file, provider, _providerSourceRank: files.length, _uploadedAt: timestampOf(file) });
+      files.push({ ...file, provider, _providerFeedId: String(feedIndex).padStart(3, '0'), _providerFeedRank: i, _providerSourceRank: files.length, _uploadedAt: timestampOf(file) });
     }
   }
   return files;
@@ -169,7 +165,7 @@ function mergeProviderFiles(webFiles, fastFiles, id, type) {
   const seen = new Set();
   const unique = [];
   for (const file of combined) {
-    const key = normalize(file.name || '');
+    const key = `${file.provider}:${file.id || file.ident || file.name || ''}`;
     if (!key || seen.has(key)) continue;
     seen.add(key);
     unique.push(file);
@@ -197,6 +193,11 @@ function toCatalogItem(match, type, file, recentRank) {
     releaseInfo: raw.releaseInfo || releaseDate.slice(0, 4),
     _releaseDate: releaseDate,
     _providerRecentRank: recentRank,
+    _providerOrderKind: 'discovery',
+    _providerFeedId: file._providerFeedId,
+    _providerFeedRank: file._providerFeedRank,
+    _audioEvidence: file.audio,
+    _nativeLocale: ['cs', 'sk'].includes(match.row.original_language) ? (match.row.original_language === 'cs' ? 'cz' : 'sk') : undefined,
     _providerSource: file.provider,
     _uploadedAt: file._uploadedAt || 0,
     behaviorHints: {
@@ -212,7 +213,7 @@ async function providerRecent(runtime, req) {
   const type = req.params.type;
   const cfg = runtime.unifiedConfig ? runtime.unifiedConfig(req) : {};
   const userKey = `${cfg?.webshare?.username || ''}|${cfg?.fastshare?.username || ''}`;
-  const cacheKey = `${userKey}:${type}:${id}:v3`;
+  const cacheKey = `${userKey}:${type}:${id}:v4`;
   const hit = cache.get(cacheKey);
   if (hit && Date.now() - hit.at < CACHE_TTL) return hit.value;
 
@@ -231,12 +232,9 @@ async function providerRecent(runtime, req) {
 
   const matches = await mapWithConcurrency(files.slice(0, 220), 7, file => matchTmdb(file, type).then(match => match ? { file, match } : null));
   const metas = [];
-  const seenIds = new Set();
   for (const item of matches) {
-    if (!item || seenIds.has(item.match.imdbId)) continue;
-    seenIds.add(item.match.imdbId);
+    if (!item) continue;
     metas.push(toCatalogItem(item.match, type, item.file, item.file._recentRank));
-    if (metas.length >= 60) break;
   }
   const value = {
     metas,

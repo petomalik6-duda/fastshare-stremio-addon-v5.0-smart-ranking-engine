@@ -1,5 +1,7 @@
 'use strict';
 
+const crypto = require('node:crypto');
+const { sortRelease, releaseKey: effectiveReleaseKey, finalizePage } = require('./catalog-order');
 const { tmdbLocalCandidates, hasCzSkAudio } = require('./catalogs');
 const { getMeta } = require('./metadata');
 const { mapWithConcurrency, normalize } = require('./utils');
@@ -13,6 +15,12 @@ const TARGET_IDS = new Set([...RELEASE_SORT_IDS, ...LATEST_IDS]);
 const CONCERT_IDS = new Set(['unified-concerts', 'unified-concerts-new']);
 const CACHE_TTL = 10 * 60 * 1000;
 const cache = new Map();
+const { SnapshotCache } = require('./catalog-order');
+const snapshots = new SnapshotCache(CACHE_TTL, 80);
+function accountKey(runtime, req) {
+  const cfg = runtime.unifiedConfig ? runtime.unifiedConfig(req) : {};
+  return crypto.createHash('sha256').update(JSON.stringify(cfg)).digest('hex');
+}
 
 const CONCERT_TERMS = [
   'concert', 'koncert', 'live concert', 'live performance', 'world tour', 'tour live',
@@ -51,9 +59,7 @@ function releaseKey(meta) {
 }
 
 function releaseSortKey(meta) {
-  const key = releaseKey(meta);
-  const today = todayKey();
-  return key > today ? today : key;
+  return effectiveReleaseKey(meta, Date.now()) || '0000-00-00';
 }
 
 function dateKey(value) {
@@ -92,51 +98,14 @@ function uploadRank(meta) {
   return Number.isFinite(ts) && ts > 0 ? ts : 0;
 }
 
-function isWebshareRecent(meta) {
-  return String(meta?._providerSource || '').toLowerCase() === 'webshare';
-}
-
-function sortNewest(metas) {
-  return metas.slice().sort((a, b) => {
-    const dateCmp = releaseSortKey(b).localeCompare(releaseSortKey(a));
-    if (dateCmp) return dateCmp;
-    const uploadedCmp = uploadRank(b) - uploadRank(a);
-    if (uploadedCmp) return uploadedCmp;
-    const recentCmp = Number(a?._providerRecentRank ?? 999999) - Number(b?._providerRecentRank ?? 999999);
-    if (recentCmp) return recentCmp;
-    return normalize(a?.name || '').localeCompare(normalize(b?.name || ''));
-  });
-}
-
-function sortRecentAdded(metas) {
-  return metas.slice().sort((a, b) => {
-    const au = uploadRank(a), bu = uploadRank(b);
-    if (au || bu) {
-      if (au !== bu) return bu - au;
-    }
-
-    const aWebRecent = isWebshareRecent(a);
-    const bWebRecent = isWebshareRecent(b);
-    const ar = Number(a?._providerRecentRank ?? 999999);
-    const br = Number(b?._providerRecentRank ?? 999999);
-    if (aWebRecent && bWebRecent && ar !== br) return ar - br;
-
-    const aDate = String(a?.type || '').toLowerCase() === 'series' ? seriesActivityKey(a) : releaseSortKey(a);
-    const bDate = String(b?.type || '').toLowerCase() === 'series' ? seriesActivityKey(b) : releaseSortKey(b);
-    const dateCmp = bDate.localeCompare(aDate);
-    if (dateCmp) return dateCmp;
-
-    if (ar !== br) return ar - br;
-    return normalize(a?.name || '').localeCompare(normalize(b?.name || ''));
-  });
-}
+function sortNewest(metas) { return sortRelease(metas); }
 
 function strongDubMeta(meta) {
   const locale = String(meta?._nativeLocale || '').toLowerCase();
   if (locale === 'cz' || locale === 'sk') return true;
   const filename = String(meta?.behaviorHints?.filename || '');
   if (!filename) return false;
-  return hasCzSkAudio({ name: filename, audio: undefined });
+  return hasCzSkAudio({ name: filename, audio: meta?._audioEvidence });
 }
 
 function dedupe(metas, limit = 120) {
@@ -203,7 +172,7 @@ async function capturePreviousCatalog(runtime, req) {
 
 async function nativeOriginals(runtime, req) {
   const type = req.params.type;
-  const key = `native-v6:${type}`;
+  const key = `native-v7:${accountKey(runtime, req)}:${type}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL) return hit.value;
 
@@ -328,25 +297,20 @@ async function buildFinal(runtime, req) {
   const id = req.params.id;
 
   if (TARGET_IDS.has(id)) {
-    const base = await capturePreviousCatalog(runtime, req);
-    const baseMetas = Array.isArray(base?.metas) ? base.metas : [];
-
-    if (DUB_IDS.has(id)) {
-      const natives = await nativeOriginals(runtime, req);
-      const foreign = baseMetas.filter(strongDubMeta);
-      const merged = dedupe([...foreign, ...natives], 120);
-      const sorted = sortNewest(merged);
-      return { metas: sorted.slice(0, 40), _debug: { base: baseMetas.length, strongDub: foreign.length, natives: natives.length } };
-    }
-
-    if (LATEST_IDS.has(id)) {
-      return { metas: sortRecentAdded(dedupe(baseMetas, 120)).slice(0, 40), _debug: { base: baseMetas.length } };
-    }
-
-    if (id === 'unified-4k-czsk') {
-      const strong = baseMetas.filter(strongDubMeta);
-      return { metas: sortNewest(dedupe(strong, 120)).slice(0, 40), _debug: { base: baseMetas.length, strongDub: strong.length } };
-    }
+    const key = `final-v7:${accountKey(runtime, req)}:${req.params.type}:${id}`;
+    const snapshot = await snapshots.get(key, async () => {
+      const unpaged = { ...req, params: { ...req.params, extra: undefined } };
+      const [base, natives] = await Promise.all([
+        capturePreviousCatalog(runtime, unpaged),
+        DUB_IDS.has(id) ? nativeOriginals(runtime, unpaged) : Promise.resolve([])
+      ]);
+      const candidates = [...(base?.metas || []), ...natives];
+      const eligible = RELEASE_SORT_IDS.has(id) ? candidates.filter(strongDubMeta) : candidates;
+      const mode = id === 'unified-czsk-movies' || id === 'unified-4k-czsk' ? 'release' : 'added';
+      return finalizePage(eligible, { mode, skip: 0, limit: Infinity });
+    });
+    const skip = skipOf(req.params.extra);
+    return { metas: snapshot.slice(skip, skip + 100), _debug: { snapshotCount: snapshot.length, skip } };
   }
 
   if (CONCERT_IDS.has(id)) {
@@ -397,8 +361,8 @@ function install(runtime) {
     try {
       const result = await buildFinal(runtime, req);
       res.set('Cache-Control', 'no-store, max-age=0');
-      console.log('[catalog-finalizer-v6]', JSON.stringify({ id, type: req.params.type, count: result?.metas?.length || 0, ...(result?._debug || {}) }));
-      if (TARGET_IDS.has(id)) console.log('[catalog-order-v6]', JSON.stringify({ id, top: orderSummary(id, result?.metas || []) }));
+      console.log('[catalog-finalizer-v7]', JSON.stringify({ id, type: req.params.type, count: result?.metas?.length || 0, ...(result?._debug || {}) }));
+      if (TARGET_IDS.has(id)) console.log('[catalog-order-v7]', JSON.stringify({ id, top: orderSummary(id, result?.metas || []) }));
       return res.json({ metas: result?.metas || [] });
     } catch (error) {
       console.error('[catalog-finalizer-error]', String(error?.message || error));
