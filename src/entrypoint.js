@@ -94,16 +94,17 @@ const providerRuntime = require('./provider-stream-mode')(strictRuntime);
 const concertRuntime = require('./concert-direct-catalog')(providerRuntime);
 const enrichedConcertRuntime = require('./concert-metadata-overlay')(concertRuntime);
 const referenceConcertRuntime = require('./concert-reference-catalog')(enrichedConcertRuntime);
-const superConcertRuntime = require('./concert-super-catalog')(referenceConcertRuntime);
+const concertCompatRuntime = require('./concert-discovery-compat')(referenceConcertRuntime);
+const superConcertRuntime = require('./concert-super-catalog')(concertCompatRuntime);
 const qualityRuntime = require('./quality-engine')(superConcertRuntime);
 
 qualityRuntime.app.get('/deploy-info', (req, res) => {
   res.set('Cache-Control', 'no-store');
   res.json({
     ok: true,
-    version: '7.18.0',
+    version: '7.18.2',
     entrypoint: 'src/entrypoint.js',
-    runtime: 'FastShare+Webshare unified v718',
+    runtime: 'FastShare+Webshare unified v7182',
     configurator: 'server-side',
     manifestCompat: true,
     strictDubCatalogs: true,
@@ -122,6 +123,7 @@ qualityRuntime.app.get('/deploy-info', (req, res) => {
     diagnosticTitleRoute: true,
     repairQueue: true,
     providerNativeConcertCatalog: true,
+    concertProviderDiscoveryCompat: true,
     concertTmdbMetadata: true,
     concertWikipediaFallback: true,
     referenceConcertCatalog: true,
@@ -136,7 +138,7 @@ qualityRuntime.app.get('/deploy-info', (req, res) => {
 
 function start() {
   return qualityRuntime.app.listen(PORT, () => {
-    console.log(`FastShare + Webshare Stremio addon v7.18.0 on ${PORT}`);
+    console.log(`FastShare + Webshare Stremio addon v7.18.2 on ${PORT}`);
   });
 }
 
