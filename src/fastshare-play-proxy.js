@@ -41,6 +41,36 @@ function proxyMimeType(filename = '', upstreamType = '') {
   return upstream || 'application/octet-stream';
 }
 
+function playbackFilename(filename = '') {
+  const raw = String(filename || '').split(/[\\/]/).pop() || 'video';
+  const cleaned = raw
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .replace(/[^a-zA-Z0-9._()\[\] -]+/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(-180);
+  return cleaned || 'video';
+}
+
+function fileExtension(filename = '') {
+  const match = playbackFilename(filename).toLowerCase().match(/\.([a-z0-9]{2,5})$/);
+  return match ? match[1] : '';
+}
+
+function iosContainerPriority(filename = '') {
+  const ext = fileExtension(filename);
+  if (['mp4', 'm4v', 'mov'].includes(ext)) return 0;
+  if (['ts', 'm2ts', 'webm'].includes(ext)) return 1;
+  if (!ext) return 2;
+  if (['mkv', 'avi', 'wmv'].includes(ext)) return 4;
+  return 3;
+}
+
+function isAppleMobileRequest(req) {
+  const userAgent = String(req?.get?.('user-agent') || '').toLowerCase();
+  return /iphone|ipad|ipod/.test(userAgent) || (userAgent.includes('macintosh') && userAgent.includes('mobile'));
+}
+
 function cleanupTargets(now = Date.now()) {
   for (const [token, entry] of proxyTargets) {
     if (!entry || entry.expiresAt <= now) proxyTargets.delete(token);
@@ -56,7 +86,7 @@ function rememberTarget(url, filename = '') {
   const token = crypto.randomBytes(18).toString('base64url');
   proxyTargets.set(token, {
     url: String(url),
-    filename: String(filename || ''),
+    filename: playbackFilename(filename),
     expiresAt: Date.now() + TOKEN_TTL_MS
   });
   cleanupTargets();
@@ -78,15 +108,18 @@ function wrapStream(stream, req) {
   if (!isAllowedFastShareUrl(directUrl)) return stream;
   const base = publicBaseUrl(req);
   if (!base) return stream;
-  const filename = stream?.behaviorHints?.filename || stream?.title || '';
+  const filename = playbackFilename(stream?.behaviorHints?.filename || stream?.title || 'video');
   const token = rememberTarget(directUrl, filename);
   if (!token) return stream;
   return {
     ...stream,
-    url: `${base}/play/${token}`,
+    url: `${base}/play/${token}/${encodeURIComponent(filename)}`,
     behaviorHints: {
       ...(stream.behaviorHints || {}),
-      notWebReady: false
+      filename,
+      notWebReady: false,
+      webPlaybackContainer: fileExtension(filename) || undefined,
+      webPlaybackPreferred: iosContainerPriority(filename) === 0
     }
   };
 }
@@ -141,7 +174,7 @@ async function proxyHandler(req, res) {
   copyHeader(upstream, res, 'last-modified');
   const contentType = proxyMimeType(target.filename, upstream.headers.get('content-type'));
   if (contentType) res.set('Content-Type', contentType);
-  res.set('Content-Disposition', 'inline');
+  res.set('Content-Disposition', `inline; filename="${target.filename.replace(/["\\]/g, '_')}"`);
 
   if (req.method === 'HEAD' || !upstream.body) {
     upstream.body?.destroy?.();
@@ -168,14 +201,24 @@ function installFastSharePlayProxy(runtime) {
   runtime.buildStreamResponse = async function buildProxiedStreamResponse(req, debug = false) {
     const result = await originalBuildStreamResponse(req, debug);
     if (!result || !Array.isArray(result.streams)) return result;
-    return {
-      ...result,
-      streams: result.streams.map(stream => wrapStream(stream, req))
-    };
+    let streams = result.streams.map(stream => wrapStream(stream, req));
+    if (isAppleMobileRequest(req)) {
+      streams = streams
+        .map((stream, index) => ({ stream, index }))
+        .sort((a, b) => {
+          const left = iosContainerPriority(a.stream?.behaviorHints?.filename || '');
+          const right = iosContainerPriority(b.stream?.behaviorHints?.filename || '');
+          return left - right || a.index - b.index;
+        })
+        .map(entry => entry.stream);
+    }
+    return { ...result, streams };
   };
 
-  runtime.app.get('/play/:token', proxyHandler);
-  runtime.app.head('/play/:token', proxyHandler);
+  // Keep the original token-only route for already cached clients and expose
+  // the filename route so Safari/AirPlay can infer the container from the URL.
+  runtime.app.get('/play/:token/:filename?', proxyHandler);
+  runtime.app.head('/play/:token/:filename?', proxyHandler);
   return runtime;
 }
 
@@ -184,3 +227,6 @@ module.exports.isAllowedFastShareUrl = isAllowedFastShareUrl;
 module.exports.proxyMimeType = proxyMimeType;
 module.exports.publicBaseUrl = publicBaseUrl;
 module.exports.wrapStream = wrapStream;
+module.exports.playbackFilename = playbackFilename;
+module.exports.iosContainerPriority = iosContainerPriority;
+module.exports.isAppleMobileRequest = isAppleMobileRequest;

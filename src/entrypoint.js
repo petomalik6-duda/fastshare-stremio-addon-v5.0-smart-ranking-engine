@@ -71,8 +71,38 @@ function oneWordMovieAliasCollision(fileName, meta, type) {
   return !exactKnownTitle;
 }
 
+function mediaContainerKey(file = {}) {
+  const explicit = String(file?.ext || file?.extension || '').trim().toLowerCase().replace(/^\./, '');
+  if (explicit) return explicit;
+  const filename = String(file?.name || file?.filename || file?.raw?.filename || file?.raw?.name || '');
+  const match = filename.match(/\.(mp4|m4v|mov|mkv|avi|webm|ts|m2ts)(?:$|\b)/i);
+  return match ? String(match[1]).toLowerCase() : 'unknown';
+}
+
+function rankFilesPreservingContainers(files, meta, type) {
+  const groups = new Map();
+  for (const file of files || []) {
+    const key = mediaContainerKey(file);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(file);
+  }
+
+  let ranked = [...groups.values()].flatMap(group => baseRankFiles(group, meta, type));
+
+  // The original ranker removes season packs when any standalone episode is
+  // present. Repeat that rule after combining container-specific groups.
+  if (type === 'series') {
+    const hasStandalone = ranked.some(file => ['exact-episode', 'multi-episode'].includes(file?.seriesKind));
+    if (hasStandalone) {
+      ranked = ranked.filter(file => ['exact-episode', 'multi-episode'].includes(file?.seriesKind));
+    }
+  }
+
+  return ranked.sort((a, b) => Number(b?.score || 0) - Number(a?.score || 0));
+}
+
 function guardedRankFiles(files, meta, type) {
-  const ranked = baseRankFiles(files, meta, type);
+  const ranked = rankFilesPreservingContainers(files, meta, type);
   if (type === 'series') return ranked.filter(file => !canonicalSeriesNearCollision(file?.name || '', meta, type));
   if (type === 'movie') {
     return ranked.filter(file => {
@@ -157,6 +187,7 @@ finalRuntime.app.get('/deploy-info', (req, res) => {
     csfdSearchLink: true,
     fastShareWebPlaybackProxy: true,
     fastShareWebPlaybackProxyRange: true,
+    fastShareContainerVariantsPreserved: true,
     renderGitCommit: process.env.RENDER_GIT_COMMIT || null,
     renderServiceName: process.env.RENDER_SERVICE_NAME || null,
     renderExternalUrl: process.env.RENDER_EXTERNAL_URL || null
@@ -178,5 +209,7 @@ module.exports = {
   explicitMovieYearCollision,
   movieTitlePrefix,
   oneWordMovieAliasCollision,
+  mediaContainerKey,
+  rankFilesPreservingContainers,
   guardedRankFiles
 };
