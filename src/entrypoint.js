@@ -85,6 +85,12 @@ function guardedRankFiles(files, meta, type) {
 
 ranking.rankFiles = guardedRankFiles;
 
+// Install the FastShare playback proxy on the base stream runtime before
+// unified-server captures it. This keeps Webshare untouched while FastShare
+// streams become browser/iOS-friendly same-origin /play URLs.
+const baseStreamRuntime = require('./server');
+require('./fastshare-play-proxy')(baseStreamRuntime);
+
 const runtime = require('./unified-server');
 require('./configure-fix')(runtime);
 require('./runtime-fix-v72')(runtime);
@@ -149,6 +155,8 @@ finalRuntime.app.get('/deploy-info', (req, res) => {
     concertSuperCatalog: true,
     concertDeduplication: true,
     csfdSearchLink: true,
+    fastShareWebPlaybackProxy: true,
+    fastShareWebPlaybackProxyRange: true,
     renderGitCommit: process.env.RENDER_GIT_COMMIT || null,
     renderServiceName: process.env.RENDER_SERVICE_NAME || null,
     renderExternalUrl: process.env.RENDER_EXTERNAL_URL || null
