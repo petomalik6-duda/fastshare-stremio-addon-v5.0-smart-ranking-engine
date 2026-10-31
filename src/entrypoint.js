@@ -102,12 +102,18 @@ function rankFilesPreservingContainers(files, meta, type) {
 }
 
 function guardedRankFiles(files, meta, type) {
-  const ranked = rankFilesPreservingContainers(files, meta, type);
-  if (type === 'series') return ranked.filter(file => !canonicalSeriesNearCollision(file?.name || '', meta, type));
-  if (type === 'movie') {
+  // Nuvio renders a People profile as a synthetic series. Filmography entries
+  // encode their real type in person-credit:<movie|series>:<tmdbId>, which the
+  // metadata bridge exposes as bridgeTarget.type. Rank against that real type.
+  const effectiveType = meta?.bridgeTarget?.type || meta?.raw?.bridgeTarget?.type || type;
+  const ranked = rankFilesPreservingContainers(files, meta, effectiveType);
+  if (effectiveType === 'series') {
+    return ranked.filter(file => !canonicalSeriesNearCollision(file?.name || '', meta, effectiveType));
+  }
+  if (effectiveType === 'movie') {
     return ranked.filter(file => {
       const name = file?.name || '';
-      return !explicitMovieYearCollision(name, meta, type) && !oneWordMovieAliasCollision(name, meta, type);
+      return !explicitMovieYearCollision(name, meta, effectiveType) && !oneWordMovieAliasCollision(name, meta, effectiveType);
     });
   }
   return ranked;
@@ -188,6 +194,7 @@ finalRuntime.app.get('/deploy-info', (req, res) => {
     fastShareWebPlaybackProxy: true,
     fastShareWebPlaybackProxyRange: true,
     fastShareContainerVariantsPreserved: true,
+    peopleFilmographyBridge: true,
     renderGitCommit: process.env.RENDER_GIT_COMMIT || null,
     renderServiceName: process.env.RENDER_SERVICE_NAME || null,
     renderExternalUrl: process.env.RENDER_EXTERNAL_URL || null
