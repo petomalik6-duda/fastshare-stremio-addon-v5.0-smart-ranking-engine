@@ -2,7 +2,6 @@
 
 const { VERSION } = require('./config');
 const { fetchJson, uniqueStrings } = require('./utils');
-const { getMeta } = require('./metadata');
 
 const DISCOVERY_BASE_URL = String(
   process.env.PEOPLE_DISCOVERY_BASE_URL ||
@@ -63,39 +62,27 @@ async function resolvePersonCreditMeta(rawId) {
   if (!discovery) throw new Error(`People bridge metadata not found for ${target.id}`);
 
   const canonicalId = String(discovery.id || discovery.imdb_id || discovery.imdbId || '').trim();
-  let base = null;
-  if (/^tt\d+$/.test(canonicalId)) {
-    try {
-      base = await getMeta(target.type, canonicalId);
-    } catch {
-      base = null;
-    }
-  }
-
-  const title = String(discovery.name || discovery.title || base?.title || canonicalId || target.id).trim();
-  const releaseInfo = String(discovery.releaseInfo || discovery.year || base?.year || '');
+  const title = String(discovery.name || discovery.title || canonicalId || target.id).trim();
+  const releaseInfo = String(discovery.releaseInfo || discovery.year || '');
   const yearMatch = releaseInfo.match(/\b(19\d{2}|20\d{2})\b/);
   const aliases = uniqueStrings([
     title,
-    ...(base?.localizedAliases || []),
-    base?.title,
     discovery.originalTitle,
     discovery.original_name,
     discovery.original_title
   ]);
 
   const value = {
-    ...(base || {}),
     type: target.type,
-    imdbId: /^tt\d+$/.test(canonicalId) ? canonicalId : (base?.imdbId || canonicalId || `tmdb:${target.tmdbId}`),
+    imdbId: /^tt\d+$/.test(canonicalId) ? canonicalId : (canonicalId || `tmdb:${target.tmdbId}`),
     stremioId: target.id,
     title,
-    year: yearMatch ? yearMatch[1] : String(base?.year || ''),
+    year: yearMatch ? yearMatch[1] : '',
     season: null,
     episode: null,
-    raw: { ...(base?.raw || {}), ...discovery, bridgeTarget: target },
+    raw: { ...discovery, bridgeTarget: target },
     localizedAliases: aliases,
-    localizedTitleData: base?.localizedTitleData || {
+    localizedTitleData: {
       aliases,
       aliasDetails: aliases.map(alias => ({ title: alias, source: 'people-bridge', language: '' })),
       sources: [{ source: 'people-bridge', count: aliases.length }]
