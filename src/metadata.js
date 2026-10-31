@@ -16,6 +16,7 @@ const {
   setCache,
   fetchJson
 } = require('./utils');
+const { parsePersonCreditId, resolvePersonCreditMeta } = require('./person-credit-bridge');
 
 const localizedMetaCache = new Map();
 const cinemetaCache = new Map();
@@ -195,6 +196,9 @@ async function fetchCinemeta(type, imdbId) {
 }
 
 async function getMeta(type, id) {
+  const bridge = parsePersonCreditId(id);
+  if (bridge) return resolvePersonCreditMeta(id);
+
   const parts = String(id || '').split(':');
   const clean = parts[0];
   const season = parts[1] ? Number(parts[1]) : null;
