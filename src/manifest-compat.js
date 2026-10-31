@@ -25,7 +25,7 @@ function installManifestCompat(runtime) {
       id: 'community.fastshare.webshare.unified',
       version: VERSION,
       name: 'FastShare + Webshare',
-      description: 'Unified FastShare/Webshare addon with consistent catalog ordering: movie premieres by valid release date, series and added catalogs by upload time with matched-episode or title-date fallback and snapshot pagination, strict final CZ/SK dubbing verification, and no-store catalog responses.',
+      description: 'Unified FastShare/Webshare addon with consistent catalog ordering, strict final CZ/SK dubbing verification, People filmography bridge support, and no-store catalog responses.',
       logo: 'https://www.stremio.com/website/stremio-logo-small.png',
       resources: ['catalog', 'meta', 'stream'],
       types: ['movie', 'series'],
@@ -40,7 +40,7 @@ function installManifestCompat(runtime) {
             { name: 'skip', isRequired: false }
           ]
         })),
-      idPrefixes: ['tt', 'concert'],
+      idPrefixes: ['tt', 'concert', 'person-credit:'],
       behaviorHints: {
         configurable: true,
         configurationRequired: !configToken
@@ -71,7 +71,7 @@ function installManifestCompat(runtime) {
       const meta = {
         ...raw,
         id: raw.id || data.imdbId || req.params.id,
-        type: req.params.type,
+        type: data?.bridgeTarget?.type || req.params.type,
         name: preferredLocalizedTitle(data, raw.name || raw.title || data.title || data.imdbId || req.params.id)
       };
       res.set('Cache-Control', 'public, max-age=900');
