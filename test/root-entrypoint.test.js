@@ -13,7 +13,8 @@ test('root server.js delegates to the guarded unified production runtime', () =>
   assert.ok(compat.app);
   assert.equal(compat.app, guarded.app);
   assert.equal(guarded.app, modular.app);
-  assert.equal(VERSION, '7.18.19');
+  assert.match(VERSION, /^\d+\.\d+\.\d+$/);
+  assert.equal(guarded.manifest(null).version, VERSION);
 });
 
 test('search optimization collapses duplicate provider files but preserves two variants', () => {
