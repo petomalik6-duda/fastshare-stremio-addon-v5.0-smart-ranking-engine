@@ -257,7 +257,11 @@ function aliasMatchScore(fileName, alias) {
   const ratio = total ? matched / total : 0;
   const exactPhrase = strictShortTitle ? total > 0 && matched === total : title.length >= 4 && file.includes(title);
   const enoughDistinctive = distinctiveTotal === 0 || distinctiveMatched >= Math.min(2, distinctiveTotal);
-  const strong = exactPhrase || matched === total || (ratio >= 0.67 && enoughDistinctive) || (matched >= 2 && ratio >= 0.5 && enoughDistinctive);
+  // A scattered two-token overlap is not enough evidence for a different release title.
+  // Keep exact phrases, full token matches and higher-coverage aliases intact.
+  const weakTwoTokenOverlap = matched === 2 && total >= 4 && ratio <= 0.5;
+  const strong = exactPhrase || matched === total || (ratio >= 0.67 && enoughDistinctive) ||
+    (matched >= 2 && ratio >= 0.5 && enoughDistinctive && !weakTwoTokenOverlap);
 
   let score = -80;
   if (exactPhrase) score = 130;
